@@ -1,0 +1,21 @@
+{
+  "miniapp": {
+    "version": "1",
+    "name": "Warper Keeper",
+    "homeUrl": "https://warper-keeper.dreamnet.ink",
+    "iconUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
+    "splashImageUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
+    "splashBackgroundColor": "#07100f",
+    "subtitle": "Your agent workspace",
+    "description": "Keep every agent job, its context, permissions, artifacts, and proof together from start to finish.",
+    "primaryCategory": "productivity",
+    "tags": ["agents", "productivity", "receipts", "workflows", "proof"],
+    "heroImageUrl": "https://warper-keeper.dreamnet.ink/warper-social-wide.png",
+    "tagline": "Bound work. Keep proof.",
+    "ogTitle": "Warper Keeper",
+    "ogDescription": "One place for every agent job, from objective to receipt.",
+    "ogImageUrl": "https://warper-keeper.dreamnet.ink/warper-social-wide.png",
+    "noindex": false,
+    "requiredCapabilities": ["actions.ready", "actions.composeCast", "quickAuth.getToken"]
+  }
+}
