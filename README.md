@@ -13,10 +13,15 @@ limits, artifacts, and verifiable completion receipts.
 ## What You Can Do
 
 - Create a Keeper for a project or area of work.
+- Personalize its cover line, color system, and stickers.
 - Open a focused task with a clear goal and completion rule.
-- Attach the context an agent needs without exposing unrelated material.
+- Build a reusable library from notes, links, and public GitHub repositories.
+- Pin public repositories to the commit inspected when they were added.
+- Connect related sources and attach only the context a task needs.
+- Build tamper-evident context packs for agent handoffs.
 - Close completed work with a deterministic SHA-256 receipt.
-- Download the receipt as portable JSON.
+- Import or export a complete Keeper as portable JSON.
+- Download receipts and proofed context packs as JSON.
 - Use the same product in Farcaster or a standard browser.
 
 Outside Farcaster, the current preview stores your workspace on the device.
@@ -37,9 +42,14 @@ Farcaster Mini App or browser
    DreamNet agents and receipts
 ```
 
-The public app never receives a Railway operator token. User workspace state
+The public app never receives a Railway operator token. Farcaster account state
 lives in Cloudflare D1, while the private Warper Keeper gateway remains the
-bounded integration surface for agent runtimes.
+bounded integration surface for agent runtimes. Browser preview state stays on
+the device.
+
+Public GitHub sources are inspected through GitHub's public API and recorded
+with their current commit SHA. Warper Keeper does not clone or execute imported
+repositories.
 
 ## Local Development
 

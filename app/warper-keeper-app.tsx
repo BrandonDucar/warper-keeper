@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Archive,
   ArrowLeft,
   BookOpen,
   Check,
@@ -13,6 +12,7 @@ import {
   LayoutDashboard,
   Library,
   LockKeyhole,
+  Palette,
   Plus,
   Radio,
   ReceiptText,
@@ -23,9 +23,29 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  KeeperLibrary,
+  ProofDropList,
+  type AddSourceInput,
+} from "./keeper-library";
+import { KeeperPersonalize } from "./keeper-personalize";
+import {
+  defaultPersonalization,
+  emptyKeeperState,
+  normalizeKeeperState,
+  type Keeper,
+  type KeeperPersonalization,
+  type KeeperState,
+  type KeeperTemplate,
+  type ProofDrop,
+  type Receipt,
+  type RiskLevel,
+  type SourceItem,
+  type SourceRelation,
+  type Trapper,
+} from "./keeper-types";
+import { sha256Canonical } from "./proof-envelope";
 
-type KeeperTemplate = "project" | "research" | "content" | "operations";
-type RiskLevel = "low" | "medium" | "high";
 type ViewName = "today" | "trappers" | "library" | "proof";
 
 type Profile = {
@@ -35,42 +55,8 @@ type Profile = {
   pfpUrl?: string;
 };
 
-type Keeper = {
-  id: string;
-  name: string;
-  template: KeeperTemplate;
-  createdAt: string;
-};
-
-type Trapper = {
-  id: string;
-  keeperId: string;
-  title: string;
-  objective: string;
-  riskLevel: RiskLevel;
-  status: "open" | "closed";
-  contextCount: number;
-  createdAt: string;
-  closedAt?: string;
-};
-
-type Receipt = {
-  id: string;
-  trapperId: string;
-  hash: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-};
-
-type KeeperState = {
-  keeper: Keeper | null;
-  trappers: Trapper[];
-  receipts: Receipt[];
-};
-
 type MiniAppSdk = typeof import("@farcaster/miniapp-sdk").sdk;
 
-const emptyState: KeeperState = { keeper: null, trappers: [], receipts: [] };
 const previewStorageKey = "warper-keeper-preview-state-v1";
 
 const templateOptions: Array<{
@@ -90,6 +76,11 @@ const sampleState: KeeperState = {
     name: "Launch Desk",
     template: "project",
     createdAt: "2026-07-28T12:00:00.000Z",
+  },
+  personalization: {
+    theme: "voltage",
+    tagline: "Bound work. Live context. Portable proof.",
+    stickers: ["WK", "PROOF", "✦"],
   },
   trappers: [
     {
@@ -119,12 +110,85 @@ const sampleState: KeeperState = {
       id: "receipt-sample",
       trapperId: "trapper-sample-closed",
       hash: "sha256:71d4a089...9ca2",
-      payload: {
-        contractVersion: "warper-keeper-receipt/1",
-        result: "Production build verified",
-        evidenceCount: 3,
+       payload: {
+         contractVersion: "warper-keeper-receipt/1",
+         title: "Verify production build",
+         result: "Production build verified",
+         evidenceCount: 3,
       },
       createdAt: "2026-07-28T12:48:00.000Z",
+    },
+  ],
+  sources: [
+    {
+      id: "source-product-brief",
+      keeperId: "keeper-sample",
+      kind: "note",
+      title: "Product brief",
+      summary:
+        "Warper Keeper keeps agent objectives, source context, boundaries, outputs, and proof together.",
+      createdAt: "2026-07-28T12:04:00.000Z",
+    },
+    {
+      id: "source-public-repo",
+      keeperId: "keeper-sample",
+      kind: "repository",
+      title: "BrandonDucar/warper-keeper",
+      summary:
+        "Public Mini App source pinned to the launch candidate commit.",
+      url: "https://github.com/BrandonDucar/warper-keeper",
+      commitSha: "bf3d8310b40a657da374dfedab5caf0f39bff15a",
+      createdAt: "2026-07-28T12:08:00.000Z",
+    },
+    {
+      id: "source-launch-checklist",
+      keeperId: "keeper-sample",
+      kind: "link",
+      title: "Farcaster launch checklist",
+      summary:
+        "Manifest, embed image, ready signal, domain identity, and share flow.",
+      url: "https://miniapps.farcaster.xyz/docs/guides/publishing",
+      createdAt: "2026-07-28T12:12:00.000Z",
+    },
+  ],
+  relations: [
+    {
+      id: "relation-brief-checklist",
+      keeperId: "keeper-sample",
+      fromSourceId: "source-product-brief",
+      toSourceId: "source-launch-checklist",
+      label: "requires",
+      createdAt: "2026-07-28T12:15:00.000Z",
+    },
+    {
+      id: "relation-repo-checklist",
+      keeperId: "keeper-sample",
+      fromSourceId: "source-public-repo",
+      toSourceId: "source-launch-checklist",
+      label: "implements",
+      createdAt: "2026-07-28T12:16:00.000Z",
+    },
+  ],
+  proofDrops: [
+    {
+      id: "proof-drop-launch",
+      keeperId: "keeper-sample",
+      title: "Launch context pack",
+      purpose:
+        "Give a launch reviewer the exact product, repository, and Farcaster context.",
+      sourceIds: [
+        "source-product-brief",
+        "source-public-repo",
+        "source-launch-checklist",
+      ],
+      hash:
+        "sha256:8bd50b3fb34dbca7bfe14fb814c2af14e96ea4380a8e9bea1c2bc3b8939abf10",
+      envelope: {
+        contractVersion: "warper-keeper-proof-drop/1",
+        title: "Launch context pack",
+        sourceCount: 3,
+      },
+      createdAt: "2026-07-28T12:40:00.000Z",
     },
   ],
 };
@@ -155,6 +219,52 @@ async function hashReceipt(payload: Record<string, unknown>) {
     .join("")}`;
 }
 
+function canonicalGitHubUrl(value: string) {
+  const parsed = new URL(value);
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.hostname !== "github.com" ||
+    parts.length !== 2 ||
+    parsed.search ||
+    parsed.hash ||
+    parts[1].endsWith(".git")
+  ) {
+    throw new Error("Use a public github.com/owner/repository URL.");
+  }
+  return {
+    owner: parts[0],
+    repository: parts[1],
+    url: `https://github.com/${parts[0]}/${parts[1]}`,
+  };
+}
+
+async function inspectPublicRepository(value: string) {
+  const parsed = canonicalGitHubUrl(value);
+  const api = `https://api.github.com/repos/${parsed.owner}/${parsed.repository}`;
+  const metadataResponse = await fetch(api, {
+    headers: { accept: "application/vnd.github+json" },
+  });
+  if (!metadataResponse.ok) throw new Error("Public repository was not found.");
+  const metadata = (await metadataResponse.json()) as {
+    private?: boolean;
+    default_branch?: string;
+  };
+  if (metadata.private !== false || !metadata.default_branch) {
+    throw new Error("Repository must be public.");
+  }
+  const commitResponse = await fetch(
+    `${api}/commits/${encodeURIComponent(metadata.default_branch)}`,
+    { headers: { accept: "application/vnd.github+json" } },
+  );
+  if (!commitResponse.ok) throw new Error("Repository commit could not be read.");
+  const commit = (await commitResponse.json()) as { sha?: string };
+  if (!commit.sha || !/^[a-f0-9]{40}$/i.test(commit.sha)) {
+    throw new Error("Repository did not return a valid commit.");
+  }
+  return { canonicalUrl: parsed.url, commitSha: commit.sha.toLowerCase() };
+}
+
 export function WarperKeeperApp() {
   const sdkRef = useRef<MiniAppSdk | null>(null);
   const [isReady, setIsReady] = useState(false);
@@ -164,13 +274,14 @@ export function WarperKeeperApp() {
   const [profile, setProfile] = useState<Profile>({
     displayName: "Browser preview",
   });
-  const [state, setState] = useState<KeeperState>(emptyState);
+  const [state, setState] = useState<KeeperState>(emptyKeeperState);
   const [view, setView] = useState<ViewName>("today");
   const [onboarding, setOnboarding] = useState<0 | 1 | 2>(0);
   const [selectedTemplate, setSelectedTemplate] =
     useState<KeeperTemplate>("project");
   const [keeperName, setKeeperName] = useState("My Keeper");
   const [showNewTrapper, setShowNewTrapper] = useState(false);
+  const [showPersonalize, setShowPersonalize] = useState(false);
   const [activeTrapperId, setActiveTrapperId] = useState<string | null>(null);
   const [taskTitle, setTaskTitle] = useState("");
   const [taskObjective, setTaskObjective] = useState("");
@@ -230,7 +341,7 @@ export function WarperKeeperApp() {
           });
           const response = await sdk.quickAuth.fetch("/api/miniapp/state");
           if (response.ok) {
-            setState((await response.json()) as KeeperState);
+            setState(normalizeKeeperState(await response.json()));
             setIsDurable(true);
           } else {
             setNotice("Cloud save is temporarily unavailable. Your preview still works.");
@@ -238,11 +349,11 @@ export function WarperKeeperApp() {
           await sdk.actions.ready();
         } else {
           const saved = window.localStorage.getItem(previewStorageKey);
-          if (saved) setState(JSON.parse(saved) as KeeperState);
+          if (saved) setState(normalizeKeeperState(JSON.parse(saved)));
         }
       } catch {
         const saved = window.localStorage.getItem(previewStorageKey);
-        if (saved) setState(JSON.parse(saved) as KeeperState);
+        if (saved) setState(normalizeKeeperState(JSON.parse(saved)));
       } finally {
         if (!cancelled) setIsReady(true);
       }
@@ -287,7 +398,15 @@ export function WarperKeeperApp() {
           createdAt: new Date().toISOString(),
         };
       }
-      setState({ keeper, trappers: [], receipts: [] });
+      setState({
+        keeper,
+        personalization: defaultPersonalization,
+        trappers: [],
+        receipts: [],
+        sources: [],
+        relations: [],
+        proofDrops: [],
+      });
       setOnboarding(0);
       setView("today");
       setNotice(`${keeper.name} is ready.`);
@@ -408,9 +527,10 @@ export function WarperKeeperApp() {
         trapper = { ...activeTrapper, status: "closed", closedAt };
         const payload = {
           contractVersion: "warper-keeper-receipt/1",
-          trapperId: activeTrapper.id,
-          keeperId: activeTrapper.keeperId,
-          objective: activeTrapper.objective,
+         trapperId: activeTrapper.id,
+         keeperId: activeTrapper.keeperId,
+         title: activeTrapper.title,
+         objective: activeTrapper.objective,
           contextCount: activeTrapper.contextCount,
           completedAt: closedAt,
           result: "Task closed by owner",
@@ -441,16 +561,276 @@ export function WarperKeeperApp() {
     }
   }
 
-  function downloadReceipt(receipt: Receipt) {
-    const blob = new Blob([JSON.stringify(receipt, null, 2)], {
+  async function addSource(input: AddSourceInput) {
+    if (!state.keeper) return;
+    setBusy(true);
+    try {
+      let source: SourceItem;
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch("/api/miniapp/sources", {
+          method: "POST",
+          body: JSON.stringify({ keeperId: state.keeper.id, ...input }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json()) as { error?: string };
+          throw new Error(payload.error ?? "Source could not be added.");
+        }
+        source = ((await response.json()) as { source: SourceItem }).source;
+      } else {
+        const repository =
+          input.kind === "repository" && input.url
+            ? await inspectPublicRepository(input.url)
+            : null;
+        source = {
+          id: crypto.randomUUID(),
+          keeperId: state.keeper.id,
+          kind: input.kind,
+          title: input.title.trim(),
+          summary: input.summary.trim(),
+          ...(input.url
+            ? { url: repository?.canonicalUrl ?? new URL(input.url).toString() }
+            : {}),
+          ...(repository ? { commitSha: repository.commitSha } : {}),
+          createdAt: new Date().toISOString(),
+        };
+      }
+      setState((current) => ({
+        ...current,
+        sources: [source, ...current.sources],
+      }));
+      setNotice(
+        source.kind === "repository"
+          ? "Public repository pinned to its current commit."
+          : "Source added to your library.",
+      );
+      await pulse("success");
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "Source could not be added.",
+      );
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePersonalization(value: KeeperPersonalization) {
+    if (!state.keeper) return;
+    setBusy(true);
+    try {
+      let personalization = value;
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch("/api/miniapp/personalization", {
+          method: "POST",
+          body: JSON.stringify({
+            keeperId: state.keeper.id,
+            ...value,
+          }),
+        });
+        if (!response.ok) throw new Error("Personalization could not be saved.");
+        personalization = (
+          (await response.json()) as {
+            personalization: KeeperPersonalization;
+          }
+        ).personalization;
+      }
+      setState((current) => ({ ...current, personalization }));
+      setShowPersonalize(false);
+      setNotice("Keeper personalization saved.");
+      await pulse("success");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Personalization could not be saved.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addRelation(fromSourceId: string, toSourceId: string, label: string) {
+    if (!state.keeper) return;
+    setBusy(true);
+    try {
+      let relation: SourceRelation;
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch("/api/miniapp/relations", {
+          method: "POST",
+          body: JSON.stringify({
+            keeperId: state.keeper.id,
+            fromSourceId,
+            toSourceId,
+            label: label.trim(),
+          }),
+        });
+        if (!response.ok) throw new Error("Connection could not be saved.");
+        relation = ((await response.json()) as { relation: SourceRelation }).relation;
+      } else {
+        relation = {
+          id: crypto.randomUUID(),
+          keeperId: state.keeper.id,
+          fromSourceId,
+          toSourceId,
+          label: label.trim(),
+          createdAt: new Date().toISOString(),
+        };
+      }
+      setState((current) => ({
+        ...current,
+        relations: [relation, ...current.relations],
+      }));
+      setNotice("Sources connected.");
+      await pulse("light");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function buildProofDrop(
+    title: string,
+    purpose: string,
+    sourceIds: string[],
+  ) {
+    if (!state.keeper) return;
+    setBusy(true);
+    try {
+      let proofDrop: ProofDrop;
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch("/api/miniapp/proof-drops", {
+          method: "POST",
+          body: JSON.stringify({
+            keeperId: state.keeper.id,
+            title: title.trim(),
+            purpose: purpose.trim(),
+            sourceIds,
+          }),
+        });
+        if (!response.ok) throw new Error("Context pack could not be built.");
+        proofDrop = ((await response.json()) as { proofDrop: ProofDrop }).proofDrop;
+      } else {
+        const sources = state.sources
+          .filter((source) => sourceIds.includes(source.id))
+          .map(({ id, kind, title: sourceTitle, url, commitSha }) => ({
+            id,
+            kind,
+            title: sourceTitle,
+            ...(url ? { url } : {}),
+            ...(commitSha ? { commitSha } : {}),
+          }));
+        const createdAt = new Date().toISOString();
+        const envelope = {
+          contractVersion: "warper-keeper-proof-drop/1",
+          keeperId: state.keeper.id,
+          title: title.trim(),
+          purpose: purpose.trim(),
+          sources,
+          createdAt,
+        };
+        proofDrop = {
+          id: crypto.randomUUID(),
+          keeperId: state.keeper.id,
+          title: title.trim(),
+          purpose: purpose.trim(),
+          sourceIds,
+          hash: await sha256Canonical(envelope),
+          envelope,
+          createdAt,
+        };
+      }
+      setState((current) => ({
+        ...current,
+        proofDrops: [proofDrop, ...current.proofDrops],
+      }));
+      setNotice("Proofed context pack created.");
+      await pulse("success");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function attachSourceToTask(source: SourceItem, task: Trapper) {
+    setBusy(true);
+    try {
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch(
+          `/api/miniapp/trappers/${task.id}/context`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: `Library source: ${source.title} [${source.id}]`,
+            }),
+          },
+        );
+        if (!response.ok) throw new Error("Source could not be attached.");
+      }
+      setState((current) => ({
+        ...current,
+        trappers: current.trappers.map((item) =>
+          item.id === task.id
+            ? { ...item, contextCount: item.contextCount + 1 }
+            : item,
+        ),
+      }));
+      setNotice(`${source.title} attached to ${task.title}.`);
+      await pulse("light");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importKeeper(value: unknown) {
+    const imported = normalizeKeeperState(value);
+    if (!imported.keeper) {
+      setNotice("That file does not contain a Keeper.");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch("/api/miniapp/import", {
+          method: "POST",
+          body: JSON.stringify(imported),
+        });
+        if (!response.ok) throw new Error("Keeper import could not be saved.");
+        setState(normalizeKeeperState(await response.json()));
+      } else {
+        setState(imported);
+      }
+      setNotice(`${imported.keeper.name} imported.`);
+      await pulse("success");
+    } catch {
+      setNotice("Keeper import could not be completed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadJson(name: string, value: unknown) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], {
       type: "application/json",
     });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${receipt.id}.json`;
+    anchor.download = name;
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  function exportKeeper() {
+    downloadJson(
+      `${state.keeper?.name.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "keeper"}.json`,
+      state,
+    );
+  }
+
+  function downloadReceipt(receipt: Receipt) {
+    downloadJson(`${receipt.id}.json`, receipt);
+  }
+
+  function downloadProofDrop(proofDrop: ProofDrop) {
+    downloadJson(`${proofDrop.id}.json`, proofDrop);
   }
 
   async function shareKeeper() {
@@ -475,7 +855,7 @@ export function WarperKeeperApp() {
   if (!isReady) {
     return (
       <main className="loading-screen" aria-busy="true">
-        <Image src="/warper-icon.png" alt="" width={72} height={72} priority />
+        <Image src="/warper-icon.png" alt="" width={72} height={72} priority unoptimized />
         <strong>Opening Warper Keeper</strong>
       </main>
     );
@@ -487,7 +867,14 @@ export function WarperKeeperApp() {
         <div className="welcome-grid" aria-hidden="true" />
         <header className="welcome-header">
           <div className="brand-lockup">
-            <Image src="/warper-icon.png" alt="" width={38} height={38} priority />
+            <Image
+              src="/warper-icon.png"
+              alt=""
+              width={38}
+              height={38}
+              priority
+              unoptimized
+            />
             <strong>Warper Keeper</strong>
           </div>
           <GatewayStatus online={gatewayOnline} />
@@ -536,7 +923,13 @@ export function WarperKeeperApp() {
 
           <div className="keeper-preview" aria-label="Warper Keeper preview">
             <div className="preview-rail">
-              <Image src="/warper-icon.png" alt="" width={30} height={30} />
+              <Image
+                src="/warper-icon.png"
+                alt=""
+                width={30}
+                height={30}
+                unoptimized
+              />
               <span />
               <span />
               <span />
@@ -660,10 +1053,16 @@ export function WarperKeeperApp() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell theme-${state.personalization.theme}`}>
       <aside className="side-rail">
         <div className="brand-lockup compact">
-          <Image src="/warper-icon.png" alt="" width={34} height={34} />
+          <Image
+            src="/warper-icon.png"
+            alt=""
+            width={34}
+            height={34}
+            unoptimized
+          />
           <strong>Warper Keeper</strong>
         </div>
         <nav aria-label="Keeper sections">
@@ -699,13 +1098,29 @@ export function WarperKeeperApp() {
       </aside>
 
       <section className="workspace">
-        <header className="workspace-header">
-          <div>
-            <p className="workspace-kicker">YOUR KEEPER</p>
-            <h1>{state.keeper?.name}</h1>
-          </div>
-          <div className="header-actions">
-            <button
+         <header className="workspace-header">
+           <div>
+             <p className="workspace-kicker">YOUR KEEPER</p>
+             <h1>{state.keeper?.name}</h1>
+             <p className="keeper-tagline">{state.personalization.tagline}</p>
+             {state.personalization.stickers.length > 0 && (
+               <div className="keeper-stickers" aria-label="Keeper stickers">
+                 {state.personalization.stickers.map((sticker, index) => (
+                   <span key={`${sticker}-${index}`}>{sticker}</span>
+                 ))}
+               </div>
+             )}
+           </div>
+           <div className="header-actions">
+             <button
+               className="icon-command"
+               aria-label="Personalize Keeper"
+               title="Personalize Keeper"
+               onClick={() => setShowPersonalize(true)}
+             >
+               <Palette size={18} />
+             </button>
+             <button
               className="icon-command"
               aria-label="Share Keeper"
               title="Share Keeper"
@@ -765,10 +1180,26 @@ export function WarperKeeperApp() {
           />
         )}
 
-        {view === "library" && <LibraryView state={state} />}
+        {view === "library" && (
+          <KeeperLibrary
+            state={state}
+            busy={busy}
+            onAddSource={addSource}
+            onAddRelation={addRelation}
+            onBuildProofDrop={buildProofDrop}
+            onAttachToTask={attachSourceToTask}
+            onExport={exportKeeper}
+            onImport={importKeeper}
+          />
+        )}
 
         {view === "proof" && (
-          <ProofView receipts={state.receipts} onDownload={downloadReceipt} />
+          <ProofView
+            receipts={state.receipts}
+            proofDrops={state.proofDrops}
+            onDownload={downloadReceipt}
+            onDownloadProofDrop={downloadProofDrop}
+          />
         )}
       </section>
 
@@ -858,6 +1289,16 @@ export function WarperKeeperApp() {
             </button>
           </section>
         </div>
+      )}
+
+      {showPersonalize && state.keeper && (
+        <KeeperPersonalize
+          keeperName={state.keeper.name}
+          value={state.personalization}
+          busy={busy}
+          onSave={savePersonalization}
+          onClose={() => setShowPersonalize(false)}
+        />
       )}
 
       {activeTrapper && (
@@ -1012,7 +1453,13 @@ function TodayView({
           <ShieldCheck size={25} />
           <div>
             <p className="eyebrow">Latest proof</p>
-            <strong>{String(receipts[0].payload.result ?? "Task completed")}</strong>
+            <strong>
+              {String(
+                receipts[0].payload.title ??
+                  receipts[0].payload.result ??
+                  "Task completed",
+              )}
+            </strong>
             <small>{receipts[0].hash}</small>
           </div>
           <button className="secondary-command" onClick={onProof}>
@@ -1079,51 +1526,16 @@ function TrappersView({
   );
 }
 
-function LibraryView({ state }: { state: KeeperState }) {
-  const contextTotal = state.trappers.reduce(
-    (sum, item) => sum + item.contextCount,
-    0,
-  );
-  return (
-    <div className="view-content">
-      <div className="view-title">
-        <div>
-          <p className="eyebrow">Attached knowledge</p>
-          <h2>Library</h2>
-        </div>
-      </div>
-      <section className="library-ledger">
-        <div>
-          <Library size={22} />
-          <strong>{contextTotal}</strong>
-          <span>Context items</span>
-        </div>
-        <div>
-          <FolderKanban size={22} />
-          <strong>{state.trappers.length}</strong>
-          <span>Task histories</span>
-        </div>
-        <div>
-          <Archive size={22} />
-          <strong>{state.receipts.length}</strong>
-          <span>Verified outputs</span>
-        </div>
-      </section>
-      <div className="plain-empty">
-        <BookOpen size={28} />
-        <h3>Your library grows with the work.</h3>
-        <p>Open a task and attach the source material that belongs with it.</p>
-      </div>
-    </div>
-  );
-}
-
 function ProofView({
   receipts,
+  proofDrops,
   onDownload,
+  onDownloadProofDrop,
 }: {
   receipts: Receipt[];
+  proofDrops: ProofDrop[];
   onDownload: (receipt: Receipt) => void;
+  onDownloadProofDrop: (proofDrop: ProofDrop) => void;
 }) {
   return (
     <div className="view-content">
@@ -1133,6 +1545,7 @@ function ProofView({
           <h2>Proof</h2>
         </div>
       </div>
+      <ProofDropList drops={proofDrops} onDownload={onDownloadProofDrop} />
       {receipts.length ? (
         <div className="receipt-list">
           {receipts.map((receipt) => (
@@ -1140,14 +1553,26 @@ function ProofView({
               <div className="receipt-mark">
                 <ShieldCheck size={22} />
               </div>
-              <div className="receipt-copy">
-                <div>
-                  <strong>{String(receipt.payload.result ?? "Task completed")}</strong>
-                  <span>{formatTime(receipt.createdAt)}</span>
-                </div>
-                <code>{receipt.hash}</code>
-                <small>{receipt.id}</small>
-              </div>
+               <div className="receipt-copy">
+                 <div>
+                   <strong>
+                     {String(
+                       receipt.payload.title ??
+                         receipt.payload.result ??
+                         "Task completed",
+                     )}
+                   </strong>
+                   <span>{formatTime(receipt.createdAt)}</span>
+                 </div>
+                 <code>{receipt.hash}</code>
+                 <small>
+                   {String(
+                     receipt.payload.title
+                       ? receipt.payload.result ?? "Task completed"
+                       : `Receipt ${receipt.id.slice(0, 8)}`,
+                   )}
+                 </small>
+               </div>
               <button
                 className="icon-command"
                 aria-label="Download receipt"
