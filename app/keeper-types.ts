@@ -1,7 +1,18 @@
 export type KeeperTemplate = "project" | "research" | "content" | "operations";
 export type KeeperTheme = "signal" | "voltage" | "archive";
 export type RiskLevel = "low" | "medium" | "high";
-export type SourceKind = "note" | "link" | "repository";
+export type SourceKind = "note" | "link" | "repository" | "file";
+
+export type RepositorySnapshot = {
+  owner: string;
+  repository: string;
+  defaultBranch: string;
+  commitSha: string;
+  fileCount: number;
+  files: string[];
+  readmeExcerpt?: string;
+  clonedAt: string;
+};
 
 export type Keeper = {
   id: string;
@@ -18,6 +29,7 @@ export type Trapper = {
   riskLevel: RiskLevel;
   status: "open" | "closed";
   contextCount: number;
+  sourceIds: string[];
   createdAt: string;
   closedAt?: string;
 };
@@ -38,6 +50,10 @@ export type SourceItem = {
   summary: string;
   url?: string;
   commitSha?: string;
+  snapshot?: RepositorySnapshot;
+  fileName?: string;
+  mimeType?: string;
+  contentExcerpt?: string;
   createdAt: string;
 };
 
@@ -59,6 +75,17 @@ export type ProofDrop = {
   hash: string;
   envelope: Record<string, unknown>;
   createdAt: string;
+};
+
+export type TrapperBundle = {
+  contractVersion: "warper-keeper-trapper/1";
+  trapper: Pick<
+    Trapper,
+    "id" | "title" | "objective" | "riskLevel" | "status" | "createdAt" | "closedAt"
+  >;
+  sources: SourceItem[];
+  receipt?: Receipt;
+  exportedAt: string;
 };
 
 export type KeeperPersonalization = {
@@ -117,7 +144,14 @@ export function normalizeKeeperState(value: unknown): KeeperState {
             .slice(0, 8)
         : defaultPersonalization.stickers,
     },
-    trappers: Array.isArray(candidate.trappers) ? candidate.trappers : [],
+    trappers: Array.isArray(candidate.trappers)
+      ? candidate.trappers.map((trapper) => ({
+          ...trapper,
+          sourceIds: Array.isArray(trapper.sourceIds)
+            ? trapper.sourceIds.filter((item): item is string => typeof item === "string")
+            : [],
+        }))
+      : [],
     receipts: Array.isArray(candidate.receipts) ? candidate.receipts : [],
     sources: Array.isArray(candidate.sources) ? candidate.sources : [],
     relations: Array.isArray(candidate.relations) ? candidate.relations : [],

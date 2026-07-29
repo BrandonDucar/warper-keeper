@@ -9,9 +9,9 @@ import {
   Download,
   FileCheck2,
   FolderKanban,
-  LayoutDashboard,
+  Layers3,
   Library,
-  LockKeyhole,
+  PackageOpen,
   Palette,
   Plus,
   Radio,
@@ -29,6 +29,7 @@ import {
   type AddSourceInput,
 } from "./keeper-library";
 import { KeeperPersonalize } from "./keeper-personalize";
+import { KeeperWorkspace } from "./keeper-workspace";
 import {
   defaultPersonalization,
   emptyKeeperState,
@@ -43,10 +44,11 @@ import {
   type SourceItem,
   type SourceRelation,
   type Trapper,
+  type TrapperBundle,
 } from "./keeper-types";
 import { sha256Canonical } from "./proof-envelope";
 
-type ViewName = "today" | "trappers" | "library" | "proof";
+type ViewName = "workspace" | "trappers" | "library" | "proof";
 
 type Profile = {
   fid?: number;
@@ -91,6 +93,11 @@ const sampleState: KeeperState = {
       riskLevel: "medium",
       status: "open",
       contextCount: 4,
+      sourceIds: [
+        "source-product-brief",
+        "source-public-repo",
+        "source-launch-checklist",
+      ],
       createdAt: "2026-07-28T13:10:00.000Z",
     },
     {
@@ -101,6 +108,7 @@ const sampleState: KeeperState = {
       riskLevel: "low",
       status: "closed",
       contextCount: 3,
+      sourceIds: ["source-public-repo", "source-launch-checklist"],
       createdAt: "2026-07-28T12:20:00.000Z",
       closedAt: "2026-07-28T12:48:00.000Z",
     },
@@ -138,6 +146,21 @@ const sampleState: KeeperState = {
         "Public Mini App source pinned to the launch candidate commit.",
       url: "https://github.com/BrandonDucar/warper-keeper",
       commitSha: "bf3d8310b40a657da374dfedab5caf0f39bff15a",
+      snapshot: {
+        owner: "BrandonDucar",
+        repository: "warper-keeper",
+        defaultBranch: "master",
+        commitSha: "bf3d8310b40a657da374dfedab5caf0f39bff15a",
+        fileCount: 38,
+        files: [
+          "README.md",
+          "app/warper-keeper-app.tsx",
+          "app/keeper-library.tsx",
+          "worker/index.ts",
+        ],
+        readmeExcerpt: "Portable context and proof for people and agents.",
+        clonedAt: "2026-07-28T12:08:00.000Z",
+      },
       createdAt: "2026-07-28T12:08:00.000Z",
     },
     {
@@ -249,6 +272,7 @@ async function inspectPublicRepository(value: string) {
   const metadata = (await metadataResponse.json()) as {
     private?: boolean;
     default_branch?: string;
+    full_name?: string;
   };
   if (metadata.private !== false || !metadata.default_branch) {
     throw new Error("Repository must be public.");
@@ -262,7 +286,39 @@ async function inspectPublicRepository(value: string) {
   if (!commit.sha || !/^[a-f0-9]{40}$/i.test(commit.sha)) {
     throw new Error("Repository did not return a valid commit.");
   }
-  return { canonicalUrl: parsed.url, commitSha: commit.sha.toLowerCase() };
+  const commitSha = commit.sha.toLowerCase();
+  const treeResponse = await fetch(`${api}/git/trees/${commitSha}?recursive=1`, {
+    headers: { accept: "application/vnd.github+json" },
+  });
+  if (!treeResponse.ok) throw new Error("Repository tree could not be indexed.");
+  const tree = (await treeResponse.json()) as {
+    tree?: Array<{ path?: string; type?: string }>;
+    truncated?: boolean;
+  };
+  const repositoryFiles = (tree.tree ?? [])
+    .filter((item) => item.type === "blob" && item.path)
+    .map((item) => item.path!)
+    .slice(0, 500);
+  const readmeResponse = await fetch(`${api}/readme`, {
+    headers: { accept: "application/vnd.github.raw+json" },
+  });
+  const readmeExcerpt = readmeResponse.ok
+    ? (await readmeResponse.text()).replace(/\s+/g, " ").trim().slice(0, 2_000)
+    : undefined;
+  return {
+    canonicalUrl: parsed.url,
+    commitSha,
+    snapshot: {
+      owner: parsed.owner,
+      repository: parsed.repository,
+      defaultBranch: metadata.default_branch,
+      commitSha,
+      fileCount: (tree.tree ?? []).filter((item) => item.type === "blob").length,
+      files: repositoryFiles,
+      ...(readmeExcerpt ? { readmeExcerpt } : {}),
+      clonedAt: new Date().toISOString(),
+    },
+  };
 }
 
 export function WarperKeeperApp() {
@@ -275,7 +331,7 @@ export function WarperKeeperApp() {
     displayName: "Browser preview",
   });
   const [state, setState] = useState<KeeperState>(emptyKeeperState);
-  const [view, setView] = useState<ViewName>("today");
+  const [view, setView] = useState<ViewName>("workspace");
   const [onboarding, setOnboarding] = useState<0 | 1 | 2>(0);
   const [selectedTemplate, setSelectedTemplate] =
     useState<KeeperTemplate>("project");
@@ -286,9 +342,11 @@ export function WarperKeeperApp() {
   const [taskTitle, setTaskTitle] = useState("");
   const [taskObjective, setTaskObjective] = useState("");
   const [taskRisk, setTaskRisk] = useState<RiskLevel>("low");
+  const [taskSourceIds, setTaskSourceIds] = useState<string[]>([]);
   const [contextDraft, setContextDraft] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [incomingTrapper, setIncomingTrapper] = useState<TrapperBundle | null>(null);
 
   const apiFetch = useCallback(async (path: string, init?: RequestInit) => {
     const sdk = sdkRef.current;
@@ -322,9 +380,34 @@ export function WarperKeeperApp() {
         .catch(() => setGatewayOnline(false));
 
       try {
+        const incomingUrl = new URL(window.location.href);
+        const shareToken = incomingUrl.searchParams.get("share");
+        const embeddedTrapper = incomingUrl.searchParams.get("trapper");
+        if (shareToken && /^[A-Za-z0-9_-]{20,80}$/.test(shareToken)) {
+          const sharedResponse = await fetch(
+            `/api/trapper-share/${encodeURIComponent(shareToken)}`,
+          );
+          if (sharedResponse.ok) {
+            const payload = (await sharedResponse.json()) as { bundle?: TrapperBundle };
+            if (payload.bundle?.contractVersion === "warper-keeper-trapper/1") {
+              setIncomingTrapper(payload.bundle);
+            }
+          }
+        } else if (embeddedTrapper) {
+          const base64 = embeddedTrapper.replace(/-/g, "+").replace(/_/g, "/");
+          const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+          const bytes = Uint8Array.from(atob(padded), (character) =>
+            character.charCodeAt(0),
+          );
+          const bundle = JSON.parse(new TextDecoder().decode(bytes)) as TrapperBundle;
+          if (bundle.contractVersion === "warper-keeper-trapper/1") {
+            setIncomingTrapper(bundle);
+          }
+        }
+
         const { sdk } = await import("@farcaster/miniapp-sdk");
         sdkRef.current = sdk;
-        const insideMiniApp = await sdk.isInMiniApp({ timeoutMs: 500 });
+        const insideMiniApp = await sdk.isInMiniApp();
         if (cancelled) return;
         setIsMiniApp(insideMiniApp);
 
@@ -408,7 +491,7 @@ export function WarperKeeperApp() {
         proofDrops: [],
       });
       setOnboarding(0);
-      setView("today");
+      setView("workspace");
       setNotice(`${keeper.name} is ready.`);
       await pulse("success");
     } catch {
@@ -420,8 +503,17 @@ export function WarperKeeperApp() {
 
   function exploreSample() {
     setState(sampleState);
-    setView("today");
+    setView("workspace");
     setNotice("You are exploring a sample Keeper. Create your own when ready.");
+    void pulse("light");
+  }
+
+  function prepareTrapper(sourceIds: string[]) {
+    setTaskSourceIds(sourceIds);
+    setTaskTitle("");
+    setTaskObjective("");
+    setTaskRisk("low");
+    setShowNewTrapper(true);
     void pulse("light");
   }
 
@@ -438,6 +530,7 @@ export function WarperKeeperApp() {
             title: taskTitle.trim(),
             objective: taskObjective.trim(),
             riskLevel: taskRisk,
+            sourceIds: taskSourceIds,
           }),
         });
         if (!response.ok) throw new Error("Could not create task");
@@ -450,7 +543,8 @@ export function WarperKeeperApp() {
           objective: taskObjective.trim(),
           riskLevel: taskRisk,
           status: "open",
-          contextCount: 0,
+          contextCount: taskSourceIds.length,
+          sourceIds: taskSourceIds,
           createdAt: new Date().toISOString(),
         };
       }
@@ -461,9 +555,10 @@ export function WarperKeeperApp() {
       setTaskTitle("");
       setTaskObjective("");
       setTaskRisk("low");
+      setTaskSourceIds([]);
       setShowNewTrapper(false);
       setActiveTrapperId(trapper.id);
-      setNotice("Task opened. Add the context your agent needs.");
+      setNotice("Trapper opened with its source bundle ready.");
       await pulse("medium");
     } catch {
       setNotice("The task could not be opened. Please try again.");
@@ -532,6 +627,8 @@ export function WarperKeeperApp() {
          title: activeTrapper.title,
          objective: activeTrapper.objective,
           contextCount: activeTrapper.contextCount,
+          sourceIds: activeTrapper.sourceIds,
+          sourceCount: activeTrapper.sourceIds.length,
           completedAt: closedAt,
           result: "Task closed by owner",
         };
@@ -591,6 +688,10 @@ export function WarperKeeperApp() {
             ? { url: repository?.canonicalUrl ?? new URL(input.url).toString() }
             : {}),
           ...(repository ? { commitSha: repository.commitSha } : {}),
+          ...(repository ? { snapshot: repository.snapshot } : {}),
+          ...(input.fileName ? { fileName: input.fileName } : {}),
+          ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+          ...(input.contentExcerpt ? { contentExcerpt: input.contentExcerpt } : {}),
           createdAt: new Date().toISOString(),
         };
       }
@@ -600,8 +701,8 @@ export function WarperKeeperApp() {
       }));
       setNotice(
         source.kind === "repository"
-          ? "Public repository pinned to its current commit."
-          : "Source added to your library.",
+          ? "Repository snapshot cloned, pinned, and indexed."
+          : "Source caught and ready to trap.",
       );
       await pulse("success");
     } catch (error) {
@@ -750,16 +851,18 @@ export function WarperKeeperApp() {
   }
 
   async function attachSourceToTask(source: SourceItem, task: Trapper) {
+    if (task.sourceIds.includes(source.id)) {
+      setNotice(`${source.title} is already inside ${task.title}.`);
+      return;
+    }
     setBusy(true);
     try {
       if (isMiniApp && isDurable) {
         const response = await apiFetch(
-          `/api/miniapp/trappers/${task.id}/context`,
+          `/api/miniapp/trappers/${task.id}/sources`,
           {
             method: "POST",
-            body: JSON.stringify({
-              content: `Library source: ${source.title} [${source.id}]`,
-            }),
+            body: JSON.stringify({ sourceId: source.id }),
           },
         );
         if (!response.ok) throw new Error("Source could not be attached.");
@@ -768,7 +871,11 @@ export function WarperKeeperApp() {
         ...current,
         trappers: current.trappers.map((item) =>
           item.id === task.id
-            ? { ...item, contextCount: item.contextCount + 1 }
+            ? {
+                ...item,
+                contextCount: item.contextCount + 1,
+                sourceIds: [...item.sourceIds, source.id],
+              }
             : item,
         ),
       }));
@@ -852,12 +959,105 @@ export function WarperKeeperApp() {
     }
   }
 
+  function trapperBundle(trapper: Trapper): TrapperBundle {
+    const receipt = state.receipts.find((item) => item.trapperId === trapper.id);
+    return {
+      contractVersion: "warper-keeper-trapper/1",
+      trapper: {
+        id: trapper.id,
+        title: trapper.title,
+        objective: trapper.objective,
+        riskLevel: trapper.riskLevel,
+        status: trapper.status,
+        createdAt: trapper.createdAt,
+        ...(trapper.closedAt ? { closedAt: trapper.closedAt } : {}),
+      },
+      sources: state.sources.filter((source) => trapper.sourceIds.includes(source.id)),
+      ...(receipt ? { receipt } : {}),
+      exportedAt: new Date().toISOString(),
+    };
+  }
+
+  async function shareTrapper(trapper: Trapper) {
+    setBusy(true);
+    try {
+      const bundle = trapperBundle(trapper);
+      let shareUrl = "";
+      if (isMiniApp && isDurable) {
+        const response = await apiFetch(
+          `/api/miniapp/trappers/${encodeURIComponent(trapper.id)}/share`,
+          { method: "POST", body: "{}" },
+        );
+        if (!response.ok) throw new Error("Share link could not be created.");
+        shareUrl = ((await response.json()) as { url: string }).url;
+      } else {
+        const encoded = btoa(
+          encodeURIComponent(JSON.stringify(bundle)).replace(
+            /%([0-9A-F]{2})/g,
+            (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)),
+          ),
+        )
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
+        shareUrl = `${window.location.origin}${window.location.pathname}?trapper=${encoded}`;
+      }
+      if (navigator.share) {
+        await navigator.share({
+          title: trapper.title,
+          text: `${trapper.title} · ${trapper.sourceIds.length} portable sources`,
+          url: shareUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        setNotice("Trapper link copied. Anyone with the link can inspect the bundle.");
+      }
+      await pulse("success");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setNotice(
+        error instanceof Error ? error.message : "The Trapper could not be shared.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function downloadTrapper(trapper: Trapper) {
+    downloadJson(
+      `${trapper.title.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "trapper"}.json`,
+      trapperBundle(trapper),
+    );
+  }
+
   if (!isReady) {
     return (
       <main className="loading-screen" aria-busy="true">
         <Image src="/warper-icon.png" alt="" width={72} height={72} priority unoptimized />
         <strong>Opening Warper Keeper</strong>
       </main>
+    );
+  }
+
+  if (incomingTrapper) {
+    return (
+      <SharedTrapperPage
+        bundle={incomingTrapper}
+        onDownload={() =>
+          downloadJson(
+            `${incomingTrapper.trapper.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")}.json`,
+            incomingTrapper,
+          )
+        }
+        onOpenKeeper={() => {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.search = "";
+          window.history.replaceState({}, "", cleanUrl);
+          setIncomingTrapper(null);
+        }}
+      />
     );
   }
 
@@ -882,25 +1082,26 @@ export function WarperKeeperApp() {
 
         <section className="welcome-content">
           <div className="welcome-copy">
-            <p className="eyebrow">Your agent workspace</p>
-            <h1>One place for every agent job.</h1>
+            <p className="eyebrow">Portable knowledge for people + agents</p>
+            <h1>Catch the good stuff. Send it ready.</h1>
             <p className="welcome-lede">
-              Keep the objective, source material, permissions, artifacts, and
-              proof together from start to finish.
+              Save notes, links, files, and public repositories. Wrap the exact
+              sources in a Trapper so anyone can continue without the
+              missing-context tax.
             </p>
 
             <div className="promise-list">
               <div>
-                <LockKeyhole size={20} />
-                <span>Bound the job before work begins</span>
+                <Library size={20} />
+                <span>Catch sources without losing where they came from</span>
               </div>
               <div>
-                <Library size={20} />
-                <span>Keep context attached to the work</span>
+                <PackageOpen size={20} />
+                <span>Bundle only the context you want to send</span>
               </div>
               <div>
                 <FileCheck2 size={20} />
-                <span>Close every job with a receipt</span>
+                <span>Carry lineage and proof with every Trapper</span>
               </div>
             </div>
 
@@ -912,11 +1113,11 @@ export function WarperKeeperApp() {
                   void pulse("medium");
                 }}
               >
-                Create my Keeper
+                Build my Keeper
                 <ChevronRight size={18} />
               </button>
               <button className="text-command" onClick={exploreSample}>
-                Explore a finished Keeper
+                Explore a working Trapper
               </button>
             </div>
           </div>
@@ -936,22 +1137,22 @@ export function WarperKeeperApp() {
             </div>
             <div className="preview-main">
               <div className="preview-title">
-                <span>Launch Desk</span>
-                <i>Active</i>
+                <span>Idea Remix Desk</span>
+                <i>3 sources</i>
               </div>
               <div className="preview-task">
-                <small>ACTIVE TASK</small>
-                <strong>Prepare launch package</strong>
+                <small>OPEN TRAPPER</small>
+                <strong>Turn old research into a launch</strong>
                 <div className="preview-progress">
                   <span />
                 </div>
-                <p>4 context items · approval required</p>
+                <p>Public repo · field notes · launch checklist</p>
               </div>
               <div className="preview-proof">
                 <ShieldCheck size={22} />
                 <div>
-                  <small>LATEST RECEIPT</small>
-                  <strong>Production build verified</strong>
+                  <small>PORTABLE PROOF</small>
+                  <strong>Sources pinned and ready to share</strong>
                 </div>
                 <Check size={18} />
               </div>
@@ -988,7 +1189,7 @@ export function WarperKeeperApp() {
         {onboarding === 1 ? (
           <section className="onboarding-stage">
             <p className="eyebrow">Choose a starting point</p>
-            <h1>What will this Keeper organize?</h1>
+            <h1>What are you collecting?</h1>
             <div className="template-list">
               {templateOptions.map((template) => (
                 <button
@@ -1067,21 +1268,21 @@ export function WarperKeeperApp() {
         </div>
         <nav aria-label="Keeper sections">
           <NavButton
-            active={view === "today"}
-            icon={<LayoutDashboard size={19} />}
-            label="Today"
-            onClick={() => setView("today")}
+            active={view === "workspace"}
+            icon={<Layers3 size={19} />}
+            label="Workspace"
+            onClick={() => setView("workspace")}
           />
           <NavButton
             active={view === "trappers"}
             icon={<FolderKanban size={19} />}
-            label="Tasks"
+            label="Trappers"
             onClick={() => setView("trappers")}
           />
           <NavButton
             active={view === "library"}
             icon={<BookOpen size={19} />}
-            label="Library"
+            label="Source lab"
             onClick={() => setView("library")}
           />
           <NavButton
@@ -1161,13 +1362,15 @@ export function WarperKeeperApp() {
           </div>
         )}
 
-        {view === "today" && (
-          <TodayView
-            openTrappers={openTrappers}
-            receipts={state.receipts}
-            onNew={() => setShowNewTrapper(true)}
-            onOpen={setActiveTrapperId}
-            onProof={() => setView("proof")}
+        {view === "workspace" && (
+          <KeeperWorkspace
+            state={state}
+            busy={busy}
+            onAddSource={addSource}
+            onPrepareTrapper={prepareTrapper}
+            onOpenTrapper={setActiveTrapperId}
+            onShareTrapper={shareTrapper}
+            onOpenSourceLab={() => setView("library")}
           />
         )}
 
@@ -1175,8 +1378,9 @@ export function WarperKeeperApp() {
           <TrappersView
             openTrappers={openTrappers}
             closedTrappers={closedTrappers}
-            onNew={() => setShowNewTrapper(true)}
+            onNew={() => prepareTrapper([])}
             onOpen={setActiveTrapperId}
+            onShare={shareTrapper}
           />
         )}
 
@@ -1205,21 +1409,21 @@ export function WarperKeeperApp() {
 
       <nav className="mobile-nav" aria-label="Keeper sections">
         <NavButton
-          active={view === "today"}
-          icon={<LayoutDashboard size={20} />}
-          label="Today"
-          onClick={() => setView("today")}
+          active={view === "workspace"}
+          icon={<Layers3 size={20} />}
+          label="Workspace"
+          onClick={() => setView("workspace")}
         />
         <NavButton
           active={view === "trappers"}
           icon={<FolderKanban size={20} />}
-          label="Tasks"
+          label="Trappers"
           onClick={() => setView("trappers")}
         />
         <NavButton
           active={view === "library"}
           icon={<BookOpen size={20} />}
-          label="Library"
+          label="Sources"
           onClick={() => setView("library")}
         />
         <NavButton
@@ -1235,8 +1439,8 @@ export function WarperKeeperApp() {
           <section className="task-sheet" role="dialog" aria-modal="true">
             <div className="sheet-header">
               <div>
-                <p className="eyebrow">New bounded task</p>
-                <h2>Open a task</h2>
+                <p className="eyebrow">Portable source bundle</p>
+                <h2>Build a Trapper</h2>
               </div>
               <button
                 className="icon-command"
@@ -1247,25 +1451,49 @@ export function WarperKeeperApp() {
               </button>
             </div>
             <label className="field-label" htmlFor="task-title">
-              Task name
+              Trapper name
             </label>
             <input
               id="task-title"
               className="text-field"
               value={taskTitle}
               onChange={(event) => setTaskTitle(event.target.value)}
-              placeholder="Prepare the launch package"
+              placeholder="Launch handoff"
             />
             <label className="field-label" htmlFor="task-objective">
-              Done looks like
+              What should happen next?
             </label>
             <textarea
               id="task-objective"
               className="text-area"
               value={taskObjective}
               onChange={(event) => setTaskObjective(event.target.value)}
-              placeholder="The production build, links, and launch copy have all been verified."
+              placeholder="Give the recipient a clear objective for using these sources."
             />
+            {state.sources.length > 0 && (
+              <fieldset className="trapper-source-picker">
+                <legend>Sources inside this Trapper</legend>
+                <div>
+                  {state.sources.map((source) => (
+                    <label key={source.id}>
+                      <input
+                        type="checkbox"
+                        checked={taskSourceIds.includes(source.id)}
+                        onChange={(event) =>
+                          setTaskSourceIds((current) =>
+                            event.target.checked
+                              ? [...current, source.id]
+                              : current.filter((item) => item !== source.id),
+                          )
+                        }
+                      />
+                      <span>{source.title}</span>
+                      <small>{source.kind}</small>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <fieldset className="risk-control">
               <legend>Risk level</legend>
               {(["low", "medium", "high"] as RiskLevel[]).map((risk) => (
@@ -1284,7 +1512,11 @@ export function WarperKeeperApp() {
               disabled={!taskTitle.trim() || !taskObjective.trim() || busy}
               onClick={() => void createTrapper()}
             >
-              {busy ? "Opening..." : "Open task"}
+              {busy
+                ? "Building..."
+                : `Build Trapper${
+                    taskSourceIds.length ? ` with ${taskSourceIds.length} sources` : ""
+                  }`}
               <Plus size={18} />
             </button>
           </section>
@@ -1325,38 +1557,163 @@ export function WarperKeeperApp() {
             </div>
             <div className="context-count">
               <Library size={18} />
-              <span>{activeTrapper.contextCount} context items attached</span>
+                <span>
+                  {activeTrapper.sourceIds.length} sources · {activeTrapper.contextCount} context
+                  items
+                </span>
             </div>
-            <label className="field-label" htmlFor="context-note">
-              Add context
-            </label>
-            <textarea
-              id="context-note"
-              className="text-area"
-              value={contextDraft}
-              onChange={(event) => setContextDraft(event.target.value)}
-              placeholder="Paste a note, source link, decision, or instruction..."
-            />
-            <button
-              className="secondary-command full"
-              disabled={!contextDraft.trim() || busy}
-              onClick={() => void addContext()}
-            >
-              Add to task
-              <Plus size={17} />
-            </button>
-            <div className="sheet-divider" />
-            <button
-              className="primary-command full"
-              disabled={busy}
-              onClick={() => void closeTrapper()}
-            >
-              {busy ? "Closing..." : "Close task and issue receipt"}
-              <FileCheck2 size={18} />
-            </button>
+            {activeTrapper.sourceIds.length > 0 && (
+              <div className="active-trapper-sources">
+                {activeTrapper.sourceIds.map((sourceId) => {
+                  const source = state.sources.find((item) => item.id === sourceId);
+                  return source ? <span key={source.id}>{source.title}</span> : null;
+                })}
+              </div>
+            )}
+            {activeTrapper.status === "open" && (
+              <>
+                <label className="field-label" htmlFor="context-note">
+                  Add context
+                </label>
+                <textarea
+                  id="context-note"
+                  className="text-area"
+                  value={contextDraft}
+                  onChange={(event) => setContextDraft(event.target.value)}
+                  placeholder="Paste a note, source link, decision, or instruction..."
+                />
+                <button
+                  className="secondary-command full"
+                  disabled={!contextDraft.trim() || busy}
+                  onClick={() => void addContext()}
+                >
+                  Add note to Trapper
+                  <Plus size={17} />
+                </button>
+              </>
+            )}
+            <div className="trapper-share-row">
+              <button
+                className="secondary-command"
+                disabled={busy}
+                onClick={() => void shareTrapper(activeTrapper)}
+              >
+                <Send size={17} />
+                Share Trapper
+              </button>
+              <button
+                className="icon-command"
+                aria-label="Download Trapper"
+                title="Download Trapper JSON"
+                onClick={() => downloadTrapper(activeTrapper)}
+              >
+                <Download size={17} />
+              </button>
+            </div>
+            {activeTrapper.status === "open" ? (
+              <>
+                <div className="sheet-divider" />
+                <button
+                  className="primary-command full"
+                  disabled={busy}
+                  onClick={() => void closeTrapper()}
+                >
+                  {busy ? "Closing..." : "Seal Trapper and issue receipt"}
+                  <FileCheck2 size={18} />
+                </button>
+              </>
+            ) : (
+              <div className="sealed-trapper-note">
+                <ShieldCheck size={19} />
+                This Trapper is sealed. Its receipt travels with the bundle.
+              </div>
+            )}
           </section>
         </div>
       )}
+    </main>
+  );
+}
+
+function SharedTrapperPage({
+  bundle,
+  onDownload,
+  onOpenKeeper,
+}: {
+  bundle: TrapperBundle;
+  onDownload: () => void;
+  onOpenKeeper: () => void;
+}) {
+  return (
+    <main className="shared-trapper-shell">
+      <header className="shared-trapper-header">
+        <div className="brand-lockup compact">
+          <Image
+            src="/warper-icon.png"
+            alt=""
+            width={36}
+            height={36}
+            unoptimized
+          />
+          <strong>Warper Keeper</strong>
+        </div>
+        <button className="secondary-command" onClick={onOpenKeeper}>
+          <ArrowLeft size={17} />
+          Open my Keeper
+        </button>
+      </header>
+      <section className="shared-trapper-card">
+        <div className="shared-trapper-seal">
+          <PackageOpen size={30} />
+          <span>PORTABLE TRAPPER</span>
+        </div>
+        <p className="eyebrow">Shared working context</p>
+        <h1>{bundle.trapper.title}</h1>
+        <p className="shared-objective">{bundle.trapper.objective}</p>
+        <div className="shared-stats">
+          <span>{bundle.sources.length} sources</span>
+          <span>{bundle.trapper.riskLevel} risk</span>
+          <span>{bundle.receipt ? "receipt attached" : "still in motion"}</span>
+        </div>
+        <div className="shared-source-grid">
+          {bundle.sources.map((source, index) => (
+            <article key={source.id}>
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              <BookOpen size={19} />
+              <div>
+                <strong>{source.title}</strong>
+                <small>
+                  {source.kind === "repository" ? "GitHub snapshot" : source.kind}
+                </small>
+                <p>{source.summary}</p>
+                {source.snapshot && (
+                  <code>
+                    {source.snapshot.fileCount} files ·{" "}
+                    {source.snapshot.commitSha.slice(0, 7)}
+                  </code>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+        {bundle.receipt && (
+          <div className="shared-proof">
+            <ShieldCheck size={21} />
+            <div>
+              <strong>Receipt attached</strong>
+              <code>{bundle.receipt.hash}</code>
+            </div>
+          </div>
+        )}
+        <button className="primary-command full" onClick={onDownload}>
+          <Download size={18} />
+          Download complete Trapper
+        </button>
+      </section>
+      <p className="shared-trapper-footnote">
+        This read-only bundle contains the exact sources and lineage its sender chose to
+        share.
+      </p>
     </main>
   );
 }
@@ -1389,109 +1746,29 @@ function NavButton({
   );
 }
 
-function TodayView({
-  openTrappers,
-  receipts,
-  onNew,
-  onOpen,
-  onProof,
-}: {
-  openTrappers: Trapper[];
-  receipts: Receipt[];
-  onNew: () => void;
-  onOpen: (id: string) => void;
-  onProof: () => void;
-}) {
-  return (
-    <div className="view-content">
-      <section className="command-band">
-        <div>
-          <p className="eyebrow">Ready for the next job</p>
-          <h2>What should your agents work on?</h2>
-        </div>
-        <button className="primary-command" onClick={onNew}>
-          <Plus size={18} />
-          Open a task
-        </button>
-      </section>
-
-      <section className="metric-strip">
-        <div>
-          <span>{openTrappers.length}</span>
-          <small>Open tasks</small>
-        </div>
-        <div>
-          <span>{receipts.length}</span>
-          <small>Receipts</small>
-        </div>
-        <div>
-          <span>{openTrappers.reduce((sum, item) => sum + item.contextCount, 0)}</span>
-          <small>Context items</small>
-        </div>
-      </section>
-
-      <section className="section-block">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">In progress</p>
-            <h2>Open tasks</h2>
-          </div>
-        </div>
-        {openTrappers.length ? (
-          <div className="task-list">
-            {openTrappers.slice(0, 3).map((trapper) => (
-              <TaskRow key={trapper.id} trapper={trapper} onOpen={onOpen} />
-            ))}
-          </div>
-        ) : (
-          <EmptyTask onNew={onNew} />
-        )}
-      </section>
-
-      {receipts[0] && (
-        <section className="latest-proof">
-          <ShieldCheck size={25} />
-          <div>
-            <p className="eyebrow">Latest proof</p>
-            <strong>
-              {String(
-                receipts[0].payload.title ??
-                  receipts[0].payload.result ??
-                  "Task completed",
-              )}
-            </strong>
-            <small>{receipts[0].hash}</small>
-          </div>
-          <button className="secondary-command" onClick={onProof}>
-            View proof
-          </button>
-        </section>
-      )}
-    </div>
-  );
-}
-
 function TrappersView({
   openTrappers,
   closedTrappers,
   onNew,
   onOpen,
+  onShare,
 }: {
   openTrappers: Trapper[];
   closedTrappers: Trapper[];
   onNew: () => void;
   onOpen: (id: string) => void;
+  onShare: (trapper: Trapper) => Promise<void>;
 }) {
   return (
     <div className="view-content">
       <div className="view-title">
         <div>
-          <p className="eyebrow">Bounded work</p>
-          <h2>Tasks</h2>
+          <p className="eyebrow">Portable working context</p>
+          <h2>Trappers</h2>
         </div>
         <button className="primary-command" onClick={onNew}>
           <Plus size={18} />
-          Open task
+          Build Trapper
         </button>
       </div>
       <section className="section-block">
@@ -1502,7 +1779,12 @@ function TrappersView({
         {openTrappers.length ? (
           <div className="task-list">
             {openTrappers.map((trapper) => (
-              <TaskRow key={trapper.id} trapper={trapper} onOpen={onOpen} />
+              <TaskRow
+                key={trapper.id}
+                trapper={trapper}
+                onOpen={onOpen}
+                onShare={onShare}
+              />
             ))}
           </div>
         ) : (
@@ -1517,7 +1799,12 @@ function TrappersView({
           </div>
           <div className="task-list">
             {closedTrappers.map((trapper) => (
-              <TaskRow key={trapper.id} trapper={trapper} onOpen={onOpen} />
+              <TaskRow
+                key={trapper.id}
+                trapper={trapper}
+                onOpen={onOpen}
+                onShare={onShare}
+              />
             ))}
           </div>
         </section>
@@ -1598,24 +1885,39 @@ function ProofView({
 function TaskRow({
   trapper,
   onOpen,
+  onShare,
 }: {
   trapper: Trapper;
   onOpen: (id: string) => void;
+  onShare?: (trapper: Trapper) => Promise<void>;
 }) {
   return (
-    <button className="task-row" onClick={() => onOpen(trapper.id)}>
-      <span className={`task-state ${trapper.status}`}>
-        {trapper.status === "closed" ? <Check size={16} /> : <CircleDot size={16} />}
-      </span>
-      <span className="task-copy">
-        <strong>{trapper.title}</strong>
-        <small>
-          {trapper.contextCount} context items · {trapper.riskLevel} risk
-        </small>
-      </span>
-      <span className="task-time">{formatTime(trapper.createdAt)}</span>
-      <ChevronRight size={18} />
-    </button>
+    <div className="task-row">
+      <button className="task-row-open" onClick={() => onOpen(trapper.id)}>
+        <span className={`task-state ${trapper.status}`}>
+          {trapper.status === "closed" ? <Check size={16} /> : <CircleDot size={16} />}
+        </span>
+        <span className="task-copy">
+          <strong>{trapper.title}</strong>
+          <small>
+            {trapper.sourceIds.length} sources · {trapper.contextCount} context items ·{" "}
+            {trapper.riskLevel} risk
+          </small>
+        </span>
+        <span className="task-time">{formatTime(trapper.createdAt)}</span>
+        <ChevronRight size={18} />
+      </button>
+      {onShare && (
+        <button
+          className="icon-command"
+          aria-label={`Share ${trapper.title}`}
+          title="Share Trapper"
+          onClick={() => void onShare(trapper)}
+        >
+          <Send size={17} />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -1623,9 +1925,9 @@ function EmptyTask({ onNew }: { onNew: () => void }) {
   return (
     <div className="plain-empty compact">
       <FolderKanban size={28} />
-      <h3>No open tasks.</h3>
+      <h3>No open Trappers.</h3>
       <button className="text-command" onClick={onNew}>
-        Open the first one
+        Build the first one
       </button>
     </div>
   );

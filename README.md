@@ -1,10 +1,11 @@
 # Warper Keeper
 
-**One place for every agent job.**
+**Catch sources. Build context. Send it ready.**
 
-Warper Keeper is a user-facing DreamNet Mini App for organizing agent work from
-request to proof. A Keeper holds bounded tasks, their source context, operating
-limits, artifacts, and verifiable completion receipts.
+Warper Keeper is a user-facing DreamNet Mini App for collecting useful material
+and turning it into portable Trappers. A Trapper carries a clear objective,
+selected sources, provenance, repository snapshots, instructions, and optional
+proof so another person or agent can pick up the work without starting over.
 
 [Open Warper Keeper](https://warper-keeper.dreamnet.ink)
 
@@ -14,10 +15,14 @@ limits, artifacts, and verifiable completion receipts.
 
 - Create a Keeper for a project or area of work.
 - Personalize its cover line, color system, and stickers.
-- Open a focused task with a clear goal and completion rule.
-- Build a reusable library from notes, links, and public GitHub repositories.
-- Pin public repositories to the commit inspected when they were added.
-- Connect related sources and attach only the context a task needs.
+- Catch notes, links, lightweight files, and public GitHub repositories from the
+  main workspace.
+- Clone a read-only GitHub snapshot containing the current commit, default
+  branch, file manifest, and README excerpt.
+- Select source blocks and wrap them in a portable Trapper with a clear next
+  objective.
+- Share a read-only Trapper link or download the complete bundle as JSON.
+- Connect related sources and attach only the context a Trapper needs.
 - Build tamper-evident context packs for agent handoffs.
 - Close completed work with a deterministic SHA-256 receipt.
 - Import or export a complete Keeper as portable JSON.
@@ -47,9 +52,9 @@ lives in Cloudflare D1, while the private Warper Keeper gateway remains the
 bounded integration surface for agent runtimes. Browser preview state stays on
 the device.
 
-Public GitHub sources are inspected through GitHub's public API and recorded
-with their current commit SHA. Warper Keeper does not clone or execute imported
-repositories.
+Public GitHub sources are inspected through GitHub's public API and recorded as
+read-only snapshots pinned to their current commit SHA. Warper Keeper does not
+run package installation, lifecycle scripts, Git hooks, or imported code.
 
 ## Local Development
 

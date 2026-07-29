@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Box,
   Download,
+  FileText,
   FileJson,
   GitBranch,
   Link2,
@@ -27,6 +28,9 @@ export type AddSourceInput = {
   title: string;
   summary: string;
   url?: string;
+  fileName?: string;
+  mimeType?: string;
+  contentExcerpt?: string;
 };
 
 export function KeeperLibrary({
@@ -145,7 +149,7 @@ export function KeeperLibrary({
       <div className="view-title">
         <div>
           <p className="eyebrow">Portable working context</p>
-          <h2>Library</h2>
+          <h2>Source lab</h2>
         </div>
         <div className="library-actions">
           <input
@@ -306,6 +310,8 @@ export function KeeperLibrary({
                     <NotebookPen size={19} />
                   ) : source.kind === "link" ? (
                     <Link2 size={19} />
+                  ) : source.kind === "file" ? (
+                    <FileText size={19} />
                   ) : (
                     <GitBranch size={19} />
                   )}
@@ -313,7 +319,7 @@ export function KeeperLibrary({
                 <div className="source-copy">
                   <div>
                     <strong>{source.title}</strong>
-                    <span>{source.kind === "repository" ? "GitHub" : source.kind}</span>
+                    <span>{source.kind === "repository" ? "GitHub snapshot" : source.kind}</span>
                   </div>
                   <p>{source.summary}</p>
                   {source.url && (
@@ -322,6 +328,12 @@ export function KeeperLibrary({
                     </a>
                   )}
                   {source.commitSha && <code>{source.commitSha}</code>}
+                  {source.snapshot && (
+                    <small>
+                      {source.snapshot.fileCount} files indexed ·{" "}
+                      {source.snapshot.defaultBranch}
+                    </small>
+                  )}
                 </div>
                 {openTasks.length > 0 && (
                   <div className="source-attach">

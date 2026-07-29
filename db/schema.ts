@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const keepers = sqliteTable("keepers", {
   id: text("id").primaryKey(),
@@ -57,7 +57,38 @@ export const sources = sqliteTable("sources", {
   summary: text("summary").notNull(),
   url: text("url"),
   commitSha: text("commit_sha"),
+  snapshotJson: text("snapshot_json"),
+  fileName: text("file_name"),
+  mimeType: text("mime_type"),
+  contentExcerpt: text("content_excerpt"),
   createdAt: text("created_at").notNull(),
+});
+
+export const trapperSources = sqliteTable(
+  "trapper_sources",
+  {
+    id: text("id").primaryKey(),
+    trapperId: text("trapper_id").notNull(),
+    sourceId: text("source_id").notNull(),
+    ownerFid: integer("owner_fid").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("trapper_sources_pair_unique").on(
+      table.trapperId,
+      table.sourceId,
+    ),
+  ],
+);
+
+export const trapperShares = sqliteTable("trapper_shares", {
+  token: text("token").primaryKey(),
+  trapperId: text("trapper_id").notNull(),
+  keeperId: text("keeper_id").notNull(),
+  ownerFid: integer("owner_fid").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  revokedAt: text("revoked_at"),
 });
 
 export const sourceRelations = sqliteTable("source_relations", {

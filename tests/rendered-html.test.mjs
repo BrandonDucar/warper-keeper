@@ -73,3 +73,26 @@ test("ships additive D1 migrations for the library and personalization", async (
   assert.match(personalizationMigration, /CREATE TABLE `keeper_personalization`/);
   assert.match(personalizationMigration, /owner_fid_unique/);
 });
+
+test("ships the portable Trapper exchange schema and source-first workspace", async () => {
+  const exchangeMigration = await readFile(
+    new URL("../drizzle/0003_dusty_supernaut.sql", import.meta.url),
+    "utf8",
+  );
+  const workspace = await readFile(
+    new URL("../app/keeper-workspace.tsx", import.meta.url),
+    "utf8",
+  );
+  const exchangeIndexes = await readFile(
+    new URL("../drizzle/0004_daffy_leper_queen.sql", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(exchangeMigration, /CREATE TABLE `trapper_sources`/);
+  assert.match(exchangeMigration, /CREATE TABLE `trapper_shares`/);
+  assert.match(exchangeMigration, /ADD `snapshot_json`/);
+  assert.match(exchangeIndexes, /UNIQUE INDEX `trapper_sources_pair_unique`/);
+  assert.match(workspace, /SOURCE-POWERED WORKSPACE/);
+  assert.match(workspace, /Clone GitHub/);
+  assert.match(workspace, /Build Trapper/);
+});

@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `trapper_sources_pair_unique` ON `trapper_sources` (`trapper_id`,`source_id`);

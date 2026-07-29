@@ -32,7 +32,7 @@ const gatewayUrl =
 const templates = new Set(["project", "research", "content", "operations"]);
 const themes = new Set(["signal", "voltage", "archive"]);
 const risks = new Set(["low", "medium", "high"]);
-const sourceKinds = new Set(["note", "link", "repository"]);
+const sourceKinds = new Set(["note", "link", "repository", "file"]);
 
 function json(payload: unknown, status = 200) {
   return Response.json(payload, {
@@ -75,6 +75,56 @@ function storedStickers(value: unknown) {
   } catch {
     return [];
   }
+}
+
+function storedObject(value: unknown) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cleanRepositorySnapshot(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const snapshot = value as Record<string, unknown>;
+  const owner = cleanText(snapshot.owner, 100);
+  const repository = cleanText(snapshot.repository, 100);
+  const defaultBranch = cleanText(snapshot.defaultBranch, 180);
+  const commitSha = cleanText(snapshot.commitSha, 40).toLowerCase();
+  if (
+    !owner ||
+    !repository ||
+    !defaultBranch ||
+    !/^[a-f0-9]{40}$/.test(commitSha)
+  ) {
+    return null;
+  }
+  const files = Array.isArray(snapshot.files)
+    ? snapshot.files
+        .map((item) => cleanText(item, 320))
+        .filter(Boolean)
+        .slice(0, 500)
+    : [];
+  return {
+    owner,
+    repository,
+    defaultBranch,
+    commitSha,
+    fileCount: Math.max(
+      files.length,
+      Math.min(100_000, Math.max(0, Number(snapshot.fileCount) || 0)),
+    ),
+    files,
+    ...(cleanText(snapshot.readmeExcerpt, 2_000)
+      ? { readmeExcerpt: cleanText(snapshot.readmeExcerpt, 2_000) }
+      : {}),
+    clonedAt: cleanText(snapshot.clonedAt, 40) || new Date().toISOString(),
+  };
 }
 
 function cleanUrl(value: unknown) {
@@ -150,7 +200,40 @@ async function inspectPublicGitHub(value: unknown) {
   if (!commit.sha || !/^[a-f0-9]{40}$/i.test(commit.sha)) {
     throw new Error("Repository returned an invalid commit");
   }
-  return { canonicalUrl, commitSha: commit.sha.toLowerCase() };
+  const commitSha = commit.sha.toLowerCase();
+  const treeResponse = await fetch(`${apiRoot}/git/trees/${commitSha}?recursive=1`, {
+    headers,
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!treeResponse.ok) throw new Error("Repository tree could not be indexed");
+  const tree = (await treeResponse.json()) as {
+    tree?: Array<{ path?: string; type?: string }>;
+  };
+  const blobs = (tree.tree ?? []).filter((item) => item.type === "blob" && item.path);
+  const readmeResponse = await fetch(`${apiRoot}/readme`, {
+    headers: {
+      ...headers,
+      accept: "application/vnd.github.raw+json",
+    },
+    signal: AbortSignal.timeout(5_000),
+  });
+  const readmeExcerpt = readmeResponse.ok
+    ? cleanText((await readmeResponse.text()).replace(/\s+/g, " "), 2_000)
+    : "";
+  return {
+    canonicalUrl,
+    commitSha,
+    snapshot: {
+      owner: parts[0],
+      repository: parts[1],
+      defaultBranch: metadata.default_branch,
+      commitSha,
+      fileCount: blobs.length,
+      files: blobs.map((item) => item.path!).slice(0, 500),
+      ...(readmeExcerpt ? { readmeExcerpt } : {}),
+      clonedAt: new Date().toISOString(),
+    },
+  };
 }
 
 async function readJson(request: Request, maxLength = 32_000) {
@@ -227,7 +310,27 @@ async function ensureSchema(db: D1Database) {
       summary TEXT NOT NULL,
       url TEXT,
       commit_sha TEXT,
+      snapshot_json TEXT,
+      file_name TEXT,
+      mime_type TEXT,
+      content_excerpt TEXT,
       created_at TEXT NOT NULL
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS trapper_sources (
+      id TEXT PRIMARY KEY,
+      trapper_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      owner_fid INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS trapper_shares (
+      token TEXT PRIMARY KEY,
+      trapper_id TEXT NOT NULL,
+      keeper_id TEXT NOT NULL,
+      owner_fid INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS source_relations (
       id TEXT PRIMARY KEY,
@@ -257,6 +360,15 @@ async function ensureSchema(db: D1Database) {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS sources_owner_idx ON sources(owner_fid, created_at)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS trapper_sources_pair_idx ON trapper_sources(trapper_id, source_id)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS trapper_sources_owner_idx ON trapper_sources(owner_fid, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS trapper_shares_owner_idx ON trapper_shares(owner_fid, created_at)",
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS source_relations_owner_idx ON source_relations(owner_fid, created_at)",
@@ -292,7 +404,7 @@ function personalizationFromRow(row: Record<string, unknown> | null) {
   };
 }
 
-function trapperFromRow(row: Record<string, unknown>) {
+function trapperFromRow(row: Record<string, unknown>, sourceIds: string[] = []) {
   return {
     id: row.id,
     keeperId: row.keeper_id,
@@ -301,6 +413,7 @@ function trapperFromRow(row: Record<string, unknown>) {
     riskLevel: row.risk_level,
     status: row.status,
     contextCount: row.context_count,
+    sourceIds,
     createdAt: row.created_at,
     ...(row.closed_at ? { closedAt: row.closed_at } : {}),
   };
@@ -317,6 +430,7 @@ function receiptFromRow(row: Record<string, unknown>) {
 }
 
 function sourceFromRow(row: Record<string, unknown>) {
+  const snapshot = cleanRepositorySnapshot(storedObject(row.snapshot_json));
   return {
     id: row.id,
     keeperId: row.keeper_id,
@@ -325,6 +439,10 @@ function sourceFromRow(row: Record<string, unknown>) {
     summary: row.summary,
     ...(row.url ? { url: row.url } : {}),
     ...(row.commit_sha ? { commitSha: row.commit_sha } : {}),
+    ...(snapshot ? { snapshot } : {}),
+    ...(row.file_name ? { fileName: row.file_name } : {}),
+    ...(row.mime_type ? { mimeType: row.mime_type } : {}),
+    ...(row.content_excerpt ? { contentExcerpt: row.content_excerpt } : {}),
     createdAt: row.created_at,
   };
 }
@@ -354,8 +472,16 @@ function proofDropFromRow(row: Record<string, unknown>) {
 }
 
 async function stateFor(db: D1Database, fid: number) {
-  const [keeper, personalization, trappers, receipts, sources, relations, proofDrops] =
-    await Promise.all([
+  const [
+    keeper,
+    personalization,
+    trappers,
+    receipts,
+    sources,
+    trapperSources,
+    relations,
+    proofDrops,
+  ] = await Promise.all([
     db
       .prepare("SELECT * FROM keepers WHERE owner_fid = ? LIMIT 1")
       .bind(fid)
@@ -382,6 +508,12 @@ async function stateFor(db: D1Database, fid: number) {
       .all<Record<string, unknown>>(),
     db
       .prepare(
+        "SELECT trapper_id, source_id FROM trapper_sources WHERE owner_fid = ? ORDER BY created_at ASC",
+      )
+      .bind(fid)
+      .all<Record<string, unknown>>(),
+    db
+      .prepare(
         "SELECT * FROM source_relations WHERE owner_fid = ? ORDER BY created_at DESC",
       )
       .bind(fid)
@@ -393,10 +525,21 @@ async function stateFor(db: D1Database, fid: number) {
       .bind(fid)
       .all<Record<string, unknown>>(),
   ]);
+  const sourceIdsByTrapper = new Map<string, string[]>();
+  for (const link of trapperSources.results) {
+    const trapperId = String(link.trapper_id);
+    const sourceId = String(link.source_id);
+    sourceIdsByTrapper.set(trapperId, [
+      ...(sourceIdsByTrapper.get(trapperId) ?? []),
+      sourceId,
+    ]);
+  }
   return {
     keeper: keeperFromRow(keeper),
     personalization: personalizationFromRow(personalization),
-    trappers: trappers.results.map(trapperFromRow),
+    trappers: trappers.results.map((row) =>
+      trapperFromRow(row, sourceIdsByTrapper.get(String(row.id)) ?? []),
+    ),
     receipts: receipts.results.map(receiptFromRow),
     sources: sources.results.map(sourceFromRow),
     relations: relations.results.map(relationFromRow),
@@ -431,6 +574,22 @@ async function handleApi(request: Request, env: Env) {
     } catch {
       return json({ ok: false, gateway: "warper-keeper" }, 503);
     }
+  }
+
+  const publicShareMatch = url.pathname.match(/^\/api\/trapper-share\/([A-Za-z0-9_-]{20,80})$/);
+  if (request.method === "GET" && publicShareMatch) {
+    await ensureSchema(env.DB);
+    const share = await env.DB.prepare(
+      `SELECT payload_json, created_at FROM trapper_shares
+       WHERE token = ? AND revoked_at IS NULL LIMIT 1`,
+    )
+      .bind(publicShareMatch[1])
+      .first<Record<string, unknown>>();
+    if (!share) return json({ error: "Shared Trapper not found" }, 404);
+    return json({
+      bundle: JSON.parse(String(share.payload_json)),
+      sharedAt: share.created_at,
+    });
   }
 
   if (!url.pathname.startsWith("/api/miniapp/")) return null;
@@ -484,6 +643,9 @@ async function handleApi(request: Request, env: Env) {
           : "low",
         status: cleanText(item.status, 12) === "closed" ? "closed" : "open",
         contextCount: Math.max(0, Math.min(10_000, Number(item.contextCount) || 0)),
+        sourceIds: Array.isArray(item.sourceIds)
+          ? item.sourceIds.map((id) => cleanText(id, 120)).filter(Boolean).slice(0, 50)
+          : [],
         createdAt: cleanText(item.createdAt, 40) || now,
         closedAt: cleanText(item.closedAt, 40) || null,
       };
@@ -502,9 +664,19 @@ async function handleApi(request: Request, env: Env) {
         commitSha: /^[a-f0-9]{40}$/i.test(cleanText(item.commitSha, 40))
           ? cleanText(item.commitSha, 40).toLowerCase()
           : null,
+        snapshot: cleanRepositorySnapshot(item.snapshot),
+        fileName: cleanText(item.fileName, 240) || null,
+        mimeType: cleanText(item.mimeType, 120) || null,
+        contentExcerpt: cleanText(item.contentExcerpt, 12_000) || null,
         createdAt: cleanText(item.createdAt, 40) || now,
       };
     });
+    for (const item of importedTrappers) {
+      item.sourceIds = item.sourceIds
+        .map((sourceId) => sourceIdMap.get(sourceId))
+        .filter((sourceId): sourceId is string => Boolean(sourceId));
+      item.contextCount = Math.max(item.contextCount, item.sourceIds.length);
+    }
     const importedRelations = arrayValue(body.relations ?? [], 300)
       .map((item) => ({
         id: crypto.randomUUID(),
@@ -589,6 +761,8 @@ async function handleApi(request: Request, env: Env) {
     const statements = [
       env.DB.prepare("DELETE FROM receipts WHERE owner_fid = ?").bind(fid),
       env.DB.prepare("DELETE FROM context_items WHERE owner_fid = ?").bind(fid),
+      env.DB.prepare("DELETE FROM trapper_shares WHERE owner_fid = ?").bind(fid),
+      env.DB.prepare("DELETE FROM trapper_sources WHERE owner_fid = ?").bind(fid),
       env.DB.prepare("DELETE FROM trappers WHERE owner_fid = ?").bind(fid),
       env.DB.prepare("DELETE FROM proof_drops WHERE owner_fid = ?").bind(fid),
       env.DB.prepare("DELETE FROM source_relations WHERE owner_fid = ?").bind(fid),
@@ -632,8 +806,9 @@ async function handleApi(request: Request, env: Env) {
       ...importedSources.map((item) =>
         env.DB.prepare(
           `INSERT INTO sources (
-            id, keeper_id, owner_fid, kind, title, summary, url, commit_sha, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, keeper_id, owner_fid, kind, title, summary, url, commit_sha,
+            snapshot_json, file_name, mime_type, content_excerpt, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).bind(
           item.id,
           keeperId,
@@ -643,7 +818,20 @@ async function handleApi(request: Request, env: Env) {
           item.summary,
           item.url,
           item.commitSha,
+          item.snapshot ? JSON.stringify(item.snapshot) : null,
+          item.fileName,
+          item.mimeType,
+          item.contentExcerpt,
           item.createdAt,
+        ),
+      ),
+      ...importedTrappers.flatMap((item) =>
+        item.sourceIds.map((sourceId) =>
+          env.DB.prepare(
+            `INSERT INTO trapper_sources (
+              id, trapper_id, source_id, owner_fid, created_at
+            ) VALUES (?, ?, ?, ?, ?)`,
+          ).bind(crypto.randomUUID(), item.id, sourceId, fid, item.createdAt),
         ),
       ),
       ...importedRelations.map((item) =>
@@ -777,6 +965,12 @@ async function handleApi(request: Request, env: Env) {
     const title = cleanText(body.title, 100);
     const objective = cleanText(body.objective, 1_200);
     const riskLevel = cleanText(body.riskLevel, 12);
+    const sourceIds = Array.isArray(body.sourceIds)
+      ? [...new Set(body.sourceIds.map((id) => cleanText(id, 120)).filter(Boolean))].slice(
+          0,
+          50,
+        )
+      : [];
     if (!keeperId || !title || !objective || !risks.has(riskLevel)) {
       return json({ error: "Task fields are incomplete" }, 400);
     }
@@ -786,23 +980,55 @@ async function handleApi(request: Request, env: Env) {
       .bind(keeperId, fid)
       .first();
     if (!keeper) return json({ error: "Keeper not found" }, 404);
+    if (sourceIds.length) {
+      const placeholders = sourceIds.map(() => "?").join(",");
+      const selected = await env.DB.prepare(
+        `SELECT id FROM sources
+         WHERE owner_fid = ? AND keeper_id = ? AND id IN (${placeholders})`,
+      )
+        .bind(fid, keeperId, ...sourceIds)
+        .all();
+      if (selected.results.length !== sourceIds.length) {
+        return json({ error: "Every Trapper source must belong to this Keeper" }, 400);
+      }
+    }
 
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
-    await env.DB.prepare(
-      `INSERT INTO trappers (
-        id, keeper_id, owner_fid, title, objective, risk_level,
-        status, context_count, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'open', 0, ?)`,
-    )
-      .bind(id, keeperId, fid, title, objective, riskLevel, createdAt)
-      .run();
+    await env.DB.batch([
+      env.DB
+        .prepare(
+          `INSERT INTO trappers (
+            id, keeper_id, owner_fid, title, objective, risk_level,
+            status, context_count, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+        )
+        .bind(
+          id,
+          keeperId,
+          fid,
+          title,
+          objective,
+          riskLevel,
+          sourceIds.length,
+          createdAt,
+        ),
+      ...sourceIds.map((sourceId) =>
+        env.DB
+          .prepare(
+            `INSERT INTO trapper_sources (
+              id, trapper_id, source_id, owner_fid, created_at
+            ) VALUES (?, ?, ?, ?, ?)`,
+          )
+          .bind(crypto.randomUUID(), id, sourceId, fid, createdAt),
+      ),
+    ]);
     const row = await env.DB.prepare(
       "SELECT * FROM trappers WHERE id = ? AND owner_fid = ?",
     )
       .bind(id, fid)
       .first<Record<string, unknown>>();
-    return json({ trapper: trapperFromRow(row!) }, 201);
+    return json({ trapper: trapperFromRow(row!, sourceIds) }, 201);
   }
 
   if (request.method === "POST" && url.pathname === "/api/miniapp/sources") {
@@ -823,21 +1049,32 @@ async function handleApi(request: Request, env: Env) {
 
     let sourceUrl: string | null = null;
     let commitSha: string | null = null;
+    let snapshot: Record<string, unknown> | null = null;
+    let fileName: string | null = null;
+    let mimeType: string | null = null;
+    let contentExcerpt: string | null = null;
     if (kind === "repository") {
       const repository = await inspectPublicGitHub(body.url);
       sourceUrl = repository.canonicalUrl;
       commitSha = repository.commitSha;
+      snapshot = repository.snapshot;
     } else if (kind === "link") {
       sourceUrl = cleanUrl(body.url);
       if (!sourceUrl) return json({ error: "Source URL is required" }, 400);
+    } else if (kind === "file") {
+      fileName = cleanText(body.fileName, 240);
+      mimeType = cleanText(body.mimeType, 120) || "application/octet-stream";
+      contentExcerpt = cleanText(body.contentExcerpt, 12_000) || null;
+      if (!fileName) return json({ error: "File name is required" }, 400);
     }
 
     const id = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     await env.DB.prepare(
       `INSERT INTO sources (
-        id, keeper_id, owner_fid, kind, title, summary, url, commit_sha, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, keeper_id, owner_fid, kind, title, summary, url, commit_sha,
+        snapshot_json, file_name, mime_type, content_excerpt, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         id,
@@ -848,6 +1085,10 @@ async function handleApi(request: Request, env: Env) {
         summary,
         sourceUrl,
         commitSha,
+        snapshot ? JSON.stringify(snapshot) : null,
+        fileName,
+        mimeType,
+        contentExcerpt,
         createdAt,
       )
       .run();
@@ -995,6 +1236,47 @@ async function handleApi(request: Request, env: Env) {
     );
   }
 
+  const trapperSourceMatch = url.pathname.match(
+    /^\/api\/miniapp\/trappers\/([^/]+)\/sources$/,
+  );
+  if (request.method === "POST" && trapperSourceMatch) {
+    const body = await readJson(request);
+    const trapperId = decodeURIComponent(trapperSourceMatch[1]);
+    const sourceId = cleanText(body.sourceId, 120);
+    if (!sourceId) return json({ error: "Source is required" }, 400);
+    const pair = await env.DB.prepare(
+      `SELECT t.id AS trapper_id, s.id AS source_id
+       FROM trappers t
+       JOIN sources s ON s.keeper_id = t.keeper_id AND s.owner_fid = t.owner_fid
+       WHERE t.id = ? AND s.id = ? AND t.owner_fid = ? AND t.status = 'open'`,
+    )
+      .bind(trapperId, sourceId, fid)
+      .first();
+    if (!pair) return json({ error: "Open Trapper or source not found" }, 404);
+    const duplicate = await env.DB.prepare(
+      "SELECT id FROM trapper_sources WHERE trapper_id = ? AND source_id = ?",
+    )
+      .bind(trapperId, sourceId)
+      .first();
+    if (duplicate) return json({ error: "Source is already in this Trapper" }, 409);
+    const createdAt = new Date().toISOString();
+    await env.DB.batch([
+      env.DB
+        .prepare(
+          `INSERT INTO trapper_sources (
+            id, trapper_id, source_id, owner_fid, created_at
+          ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .bind(crypto.randomUUID(), trapperId, sourceId, fid, createdAt),
+      env.DB
+        .prepare(
+          "UPDATE trappers SET context_count = context_count + 1 WHERE id = ? AND owner_fid = ?",
+        )
+        .bind(trapperId, fid),
+    ]);
+    return json({ ok: true, trapperId, sourceId }, 201);
+  }
+
   const contextMatch = url.pathname.match(
     /^\/api\/miniapp\/trappers\/([^/]+)\/context$/,
   );
@@ -1025,6 +1307,72 @@ async function handleApi(request: Request, env: Env) {
     return json({ ok: true }, 201);
   }
 
+  const shareMatch = url.pathname.match(
+    /^\/api\/miniapp\/trappers\/([^/]+)\/share$/,
+  );
+  if (request.method === "POST" && shareMatch) {
+    const trapperId = decodeURIComponent(shareMatch[1]);
+    const trapper = await env.DB.prepare(
+      "SELECT * FROM trappers WHERE id = ? AND owner_fid = ?",
+    )
+      .bind(trapperId, fid)
+      .first<Record<string, unknown>>();
+    if (!trapper) return json({ error: "Trapper not found" }, 404);
+    const linkedSources = await env.DB.prepare(
+      `SELECT s.* FROM sources s
+       JOIN trapper_sources ts ON ts.source_id = s.id
+       WHERE ts.trapper_id = ? AND ts.owner_fid = ?
+       ORDER BY ts.created_at ASC`,
+    )
+      .bind(trapperId, fid)
+      .all<Record<string, unknown>>();
+    const receipt = await env.DB.prepare(
+      "SELECT * FROM receipts WHERE trapper_id = ? AND owner_fid = ? ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(trapperId, fid)
+      .first<Record<string, unknown>>();
+    const exportedAt = new Date().toISOString();
+    const bundle = {
+      contractVersion: "warper-keeper-trapper/1",
+      trapper: {
+        id: trapper.id,
+        title: trapper.title,
+        objective: trapper.objective,
+        riskLevel: trapper.risk_level,
+        status: trapper.status,
+        createdAt: trapper.created_at,
+        ...(trapper.closed_at ? { closedAt: trapper.closed_at } : {}),
+      },
+      sources: linkedSources.results.map(sourceFromRow),
+      ...(receipt ? { receipt: receiptFromRow(receipt) } : {}),
+      exportedAt,
+    };
+    const token = `${crypto.randomUUID().replaceAll("-", "")}${crypto
+      .randomUUID()
+      .replaceAll("-", "")}`;
+    await env.DB.prepare(
+      `INSERT INTO trapper_shares (
+        token, trapper_id, keeper_id, owner_fid, payload_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        token,
+        trapperId,
+        String(trapper.keeper_id),
+        fid,
+        JSON.stringify(bundle),
+        exportedAt,
+      )
+      .run();
+    return json(
+      {
+        token,
+        url: `${url.origin}${url.pathname.startsWith("/api/") ? "/" : url.pathname}?share=${token}`,
+      },
+      201,
+    );
+  }
+
   const closeMatch = url.pathname.match(
     /^\/api\/miniapp\/trappers\/([^/]+)\/close$/,
   );
@@ -1039,6 +1387,12 @@ async function handleApi(request: Request, env: Env) {
 
     const closedAt = new Date().toISOString();
     const receiptId = crypto.randomUUID();
+    const linkedSources = await env.DB.prepare(
+      "SELECT source_id FROM trapper_sources WHERE trapper_id = ? AND owner_fid = ? ORDER BY created_at ASC",
+    )
+      .bind(trapperId, fid)
+      .all<Record<string, unknown>>();
+    const sourceIds = linkedSources.results.map((item) => String(item.source_id));
     const payload = {
       contractVersion: "warper-keeper-receipt/1",
       receiptId,
@@ -1048,6 +1402,8 @@ async function handleApi(request: Request, env: Env) {
       title: row.title,
       objective: row.objective,
       contextCount: row.context_count,
+      sourceIds,
+      sourceCount: sourceIds.length,
       completedAt: closedAt,
       result: "Task closed by owner",
     };
@@ -1067,7 +1423,10 @@ async function handleApi(request: Request, env: Env) {
     ]);
 
     return json({
-      trapper: trapperFromRow({ ...row, status: "closed", closed_at: closedAt }),
+      trapper: trapperFromRow(
+        { ...row, status: "closed", closed_at: closedAt },
+        sourceIds,
+      ),
       receipt: {
         id: receiptId,
         trapperId,
