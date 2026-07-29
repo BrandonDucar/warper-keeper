@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render(path = "/") {
@@ -35,6 +35,9 @@ test("server-renders the Warper Keeper product shell", async () => {
 
   assert.match(html, /<title>Warper Keeper<\/title>/i);
   assert.match(html, /fc:miniapp/i);
+  assert.match(html, /fc:frame/i);
+  assert.match(html, /launch_miniapp/i);
+  assert.match(html, /launch_frame/i);
   assert.match(html, /warper-social\.png/i);
   assert.match(html, /src="\/warper-icon\.png"/i);
   assert.doesNotMatch(html, /_vinext\/image\?url=%2Fwarper-icon/i);
@@ -56,6 +59,57 @@ test("ships a Farcaster manifest with current Mini App fields", async () => {
   );
   assert.ok(manifest.miniapp.requiredCapabilities.includes("actions.ready"));
   assert.ok(manifest.miniapp.iconUrl.endsWith("/warper-icon.png"));
+  assert.ok(manifest.miniapp.imageUrl.endsWith("/warper-social.png"));
+  assert.equal(manifest.miniapp.buttonTitle, "Open Warper Keeper");
+  assert.equal(
+    manifest.miniapp.canonicalDomain,
+    "warper-keeper.dreamnet.ink",
+  );
+});
+
+test("ships Farcaster-compatible PNG dimensions", async () => {
+  async function pngDimensions(file) {
+    const handle = await open(file, "r");
+    try {
+      const header = Buffer.alloc(24);
+      await handle.read(header, 0, header.length, 0);
+      assert.equal(header.subarray(1, 4).toString("ascii"), "PNG");
+      return {
+        width: header.readUInt32BE(16),
+        height: header.readUInt32BE(20),
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+
+  assert.deepEqual(
+    await pngDimensions(
+      new URL("../public/warper-social.png", import.meta.url),
+    ),
+    { width: 1200, height: 800 },
+  );
+  assert.deepEqual(
+    await pngDimensions(
+      new URL("../public/warper-icon.png", import.meta.url),
+    ),
+    { width: 1024, height: 1024 },
+  );
+});
+
+test("releases the Farcaster splash before optional cloud hydration", async () => {
+  const app = await readFile(
+    new URL("../app/warper-keeper-app.tsx", import.meta.url),
+    "utf8",
+  );
+  const readyCall = app.indexOf("await sdk.actions.ready()");
+  const cloudHydration = app.indexOf(
+    'await sdk.quickAuth.fetch("/api/miniapp/state")',
+  );
+
+  assert.ok(readyCall >= 0);
+  assert.ok(cloudHydration >= 0);
+  assert.ok(readyCall < cloudHydration);
 });
 
 test("ships additive D1 migrations for the library and personalization", async () => {

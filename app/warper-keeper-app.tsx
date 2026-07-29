@@ -422,14 +422,20 @@ export function WarperKeeperApp() {
               `Farcaster #${context.user.fid}`,
             pfpUrl: context.user.pfpUrl,
           });
-          const response = await sdk.quickAuth.fetch("/api/miniapp/state");
-          if (response.ok) {
-            setState(normalizeKeeperState(await response.json()));
-            setIsDurable(true);
-          } else {
+          await sdk.actions.ready();
+          try {
+            const response = await sdk.quickAuth.fetch("/api/miniapp/state");
+            if (response.ok) {
+              setState(normalizeKeeperState(await response.json()));
+              setIsDurable(true);
+            } else {
+              setNotice(
+                "Cloud save is temporarily unavailable. Your preview still works.",
+              );
+            }
+          } catch {
             setNotice("Cloud save is temporarily unavailable. Your preview still works.");
           }
-          await sdk.actions.ready();
         } else {
           const saved = window.localStorage.getItem(previewStorageKey);
           if (saved) setState(normalizeKeeperState(JSON.parse(saved)));

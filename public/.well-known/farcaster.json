@@ -4,6 +4,8 @@
     "name": "Warper Keeper",
     "homeUrl": "https://warper-keeper.dreamnet.ink",
     "iconUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
+    "imageUrl": "https://warper-keeper.dreamnet.ink/warper-social.png",
+    "buttonTitle": "Open Warper Keeper",
     "splashImageUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
     "splashBackgroundColor": "#07100f",
     "subtitle": "Portable knowledge Trappers",
@@ -15,6 +17,7 @@
     "ogTitle": "Warper Keeper",
     "ogDescription": "Portable source bundles for people and agents.",
     "ogImageUrl": "https://warper-keeper.dreamnet.ink/warper-social-wide.png",
+    "canonicalDomain": "warper-keeper.dreamnet.ink",
     "noindex": false,
     "requiredCapabilities": ["actions.ready", "actions.composeCast", "quickAuth.getToken"]
   }

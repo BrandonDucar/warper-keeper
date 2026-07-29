@@ -33,6 +33,17 @@ const miniAppEmbed = {
   },
 };
 
+const frameEmbed = {
+  ...miniAppEmbed,
+  button: {
+    ...miniAppEmbed.button,
+    action: {
+      ...miniAppEmbed.button.action,
+      type: "launch_frame",
+    },
+  },
+};
+
 export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
   title: "Warper Keeper",
@@ -59,6 +70,7 @@ export const metadata: Metadata = {
   },
   other: {
     "fc:miniapp": JSON.stringify(miniAppEmbed),
+    "fc:frame": JSON.stringify(frameEmbed),
   },
 };
 
