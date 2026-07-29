@@ -37,7 +37,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(appUrl),
   title: "Warper Keeper",
   description:
-    "Keep every agent job, its context, permissions, artifacts, and proof together.",
+    "Catch notes, links, files, and public repositories. Send the exact context as a portable Trapper.",
   icons: {
     icon: "/warper-icon.png",
     shortcut: "/warper-icon.png",
@@ -45,7 +45,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Warper Keeper",
     description:
-      "One place for every agent job, from bounded objective to verifiable receipt.",
+      "Catch the good stuff. Wrap exact sources in a Trapper. Send it ready.",
     url: appUrl,
     siteName: "Warper Keeper",
     images: [{ url: "/warper-social.png", width: 1200, height: 800 }],
@@ -54,7 +54,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Warper Keeper",
-    description: "One place for every agent job.",
+    description: "Portable source bundles for people and agents.",
     images: ["/warper-social.png"],
   },
   other: {

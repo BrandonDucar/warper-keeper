@@ -96,3 +96,18 @@ test("ships the portable Trapper exchange schema and source-first workspace", as
   assert.match(workspace, /Clone GitHub/);
   assert.match(workspace, /Build Trapper/);
 });
+
+test("ships a public Cloudflare runtime without the ChatGPT access gate", async () => {
+  const config = JSON.parse(
+    await readFile(
+      new URL("../wrangler.public.jsonc", import.meta.url),
+      "utf8",
+    ),
+  );
+
+  assert.equal(config.name, "warper-keeper");
+  assert.equal(config.workers_dev, true);
+  assert.equal(config.d1_databases[0].binding, "DB");
+  assert.equal(config.routes[0].pattern, "warper-keeper.dreamnet.ink");
+  assert.equal(config.routes[0].custom_domain, true);
+});
