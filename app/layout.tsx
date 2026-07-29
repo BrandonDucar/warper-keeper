@@ -18,6 +18,7 @@ const instrumentSans = Instrument_Sans({
 });
 
 const appUrl = "https://warper-keeper.dreamnet.ink";
+const miniAppUrl = `${appUrl}/?miniApp=true`;
 const miniAppEmbed = {
   version: "1",
   imageUrl: `${appUrl}/warper-social.png`,
@@ -25,9 +26,9 @@ const miniAppEmbed = {
     title: "Open Warper Keeper",
     action: {
       type: "launch_miniapp",
-      url: appUrl,
+      url: miniAppUrl,
       name: "Warper Keeper",
-      splashImageUrl: `${appUrl}/warper-icon.png`,
+      splashImageUrl: `${appUrl}/warper-splash.png`,
       splashBackgroundColor: "#07100f",
     },
   },

@@ -77,7 +77,12 @@ npm test
 The app calls `sdk.actions.ready()` after initialization, publishes an
 `fc:miniapp` embed, serves its manifest from
 `/.well-known/farcaster.json`, and uses Farcaster Quick Auth for durable
-account state.
+account state. It capability-checks optional host actions before exposing them
+and lets supported clients save the app with `actions.addMiniApp()`.
+
+The production manifest still needs an `accountAssociation` signed for the
+exact `warper-keeper.dreamnet.ink` domain in Farcaster Developer Tools before
+the app can be treated as owner-verified in discovery.
 
 ## Status
 

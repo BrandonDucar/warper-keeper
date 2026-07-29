@@ -2,16 +2,17 @@
   "miniapp": {
     "version": "1",
     "name": "Warper Keeper",
-    "homeUrl": "https://warper-keeper.dreamnet.ink",
+    "homeUrl": "https://warper-keeper.dreamnet.ink/?miniApp=true",
     "iconUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
     "imageUrl": "https://warper-keeper.dreamnet.ink/warper-social.png",
     "buttonTitle": "Open Warper Keeper",
-    "splashImageUrl": "https://warper-keeper.dreamnet.ink/warper-icon.png",
+    "splashImageUrl": "https://warper-keeper.dreamnet.ink/warper-splash.png",
     "splashBackgroundColor": "#07100f",
     "subtitle": "Portable knowledge Trappers",
     "description": "Catch notes, links, files, and public repositories. Send the exact context as a portable Trapper.",
     "primaryCategory": "productivity",
     "tags": ["agents", "knowledge", "sources", "workflows", "proof"],
+    "screenshotUrls": ["https://warper-keeper.dreamnet.ink/warper-screenshot.png"],
     "heroImageUrl": "https://warper-keeper.dreamnet.ink/warper-social-wide.png",
     "tagline": "Catch it. Wrap it. Send it.",
     "ogTitle": "Warper Keeper",
@@ -19,6 +20,6 @@
     "ogImageUrl": "https://warper-keeper.dreamnet.ink/warper-social-wide.png",
     "canonicalDomain": "warper-keeper.dreamnet.ink",
     "noindex": false,
-    "requiredCapabilities": ["actions.ready", "actions.composeCast", "quickAuth.getToken"]
+    "requiredCapabilities": ["actions.ready"]
   }
 }

@@ -55,11 +55,14 @@ test("ships a Farcaster manifest with current Mini App fields", async () => {
   assert.equal(manifest.miniapp.name, "Warper Keeper");
   assert.equal(
     manifest.miniapp.homeUrl,
-    "https://warper-keeper.dreamnet.ink",
+    "https://warper-keeper.dreamnet.ink/?miniApp=true",
   );
   assert.ok(manifest.miniapp.requiredCapabilities.includes("actions.ready"));
+  assert.deepEqual(manifest.miniapp.requiredCapabilities, ["actions.ready"]);
   assert.ok(manifest.miniapp.iconUrl.endsWith("/warper-icon.png"));
   assert.ok(manifest.miniapp.imageUrl.endsWith("/warper-social.png"));
+  assert.ok(manifest.miniapp.splashImageUrl.endsWith("/warper-splash.png"));
+  assert.ok(manifest.miniapp.screenshotUrls[0].endsWith("/warper-screenshot.png"));
   assert.equal(manifest.miniapp.buttonTitle, "Open Warper Keeper");
   assert.equal(
     manifest.miniapp.canonicalDomain,
@@ -95,6 +98,18 @@ test("ships Farcaster-compatible PNG dimensions", async () => {
     ),
     { width: 1024, height: 1024 },
   );
+  assert.deepEqual(
+    await pngDimensions(
+      new URL("../public/warper-splash.png", import.meta.url),
+    ),
+    { width: 200, height: 200 },
+  );
+  assert.deepEqual(
+    await pngDimensions(
+      new URL("../public/warper-screenshot.png", import.meta.url),
+    ),
+    { width: 1284, height: 2778 },
+  );
 });
 
 test("releases the Farcaster splash before optional cloud hydration", async () => {
@@ -102,7 +117,7 @@ test("releases the Farcaster splash before optional cloud hydration", async () =
     new URL("../app/warper-keeper-app.tsx", import.meta.url),
     "utf8",
   );
-  const readyCall = app.indexOf("await sdk.actions.ready()");
+  const readyCall = app.indexOf("await within(sdk.actions.ready())");
   const cloudHydration = app.indexOf(
     'await sdk.quickAuth.fetch("/api/miniapp/state")',
   );
@@ -110,6 +125,9 @@ test("releases the Farcaster splash before optional cloud hydration", async () =
   assert.ok(readyCall >= 0);
   assert.ok(cloudHydration >= 0);
   assert.ok(readyCall < cloudHydration);
+  assert.match(app, /sdk\.getCapabilities\(\)/);
+  assert.match(app, /sdk\.actions\.addMiniApp\(\)/);
+  assert.match(app, /Farcaster host did not respond in time/);
 });
 
 test("ships additive D1 migrations for the library and personalization", async () => {

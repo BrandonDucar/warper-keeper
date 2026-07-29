@@ -2,6 +2,7 @@
 
 import {
   ArrowLeft,
+  BookmarkPlus,
   BookOpen,
   Check,
   ChevronRight,
@@ -60,6 +61,24 @@ type Profile = {
 type MiniAppSdk = typeof import("@farcaster/miniapp-sdk").sdk;
 
 const previewStorageKey = "warper-keeper-preview-state-v1";
+const miniAppTimeoutMs = 3_000;
+
+async function within<T>(promise: Promise<T>, timeoutMs = miniAppTimeoutMs) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("Farcaster host did not respond in time")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
 
 const templateOptions: Array<{
   id: KeeperTemplate;
@@ -326,6 +345,7 @@ export function WarperKeeperApp() {
   const [isReady, setIsReady] = useState(false);
   const [isMiniApp, setIsMiniApp] = useState(false);
   const [isDurable, setIsDurable] = useState(false);
+  const [canAddMiniApp, setCanAddMiniApp] = useState(false);
   const [gatewayOnline, setGatewayOnline] = useState<boolean | null>(null);
   const [profile, setProfile] = useState<Profile>({
     displayName: "Browser preview",
@@ -405,14 +425,28 @@ export function WarperKeeperApp() {
           }
         }
 
+        const launchUrl = new URL(window.location.href);
+        const hasMiniAppHint =
+          launchUrl.searchParams.get("miniApp") === "true" ||
+          window.parent !== window ||
+          "ReactNativeWebView" in window;
+        if (!hasMiniAppHint) {
+          const saved = window.localStorage.getItem(previewStorageKey);
+          if (saved) setState(normalizeKeeperState(JSON.parse(saved)));
+          return;
+        }
+
         const { sdk } = await import("@farcaster/miniapp-sdk");
         sdkRef.current = sdk;
-        const insideMiniApp = await sdk.isInMiniApp();
+        const insideMiniApp = await within(sdk.isInMiniApp());
         if (cancelled) return;
         setIsMiniApp(insideMiniApp);
 
         if (insideMiniApp) {
-          const context = await sdk.context;
+          const [context, capabilities] = await Promise.all([
+            within(sdk.context),
+            within(sdk.getCapabilities()).catch(() => []),
+          ]);
           setProfile({
             fid: context.user.fid,
             username: context.user.username,
@@ -422,7 +456,8 @@ export function WarperKeeperApp() {
               `Farcaster #${context.user.fid}`,
             pfpUrl: context.user.pfpUrl,
           });
-          await sdk.actions.ready();
+          setCanAddMiniApp(capabilities.includes("actions.addMiniApp"));
+          await within(sdk.actions.ready());
           try {
             const response = await sdk.quickAuth.fetch("/api/miniapp/state");
             if (response.ok) {
@@ -965,6 +1000,22 @@ export function WarperKeeperApp() {
     }
   }
 
+  async function saveMiniApp() {
+    const sdk = sdkRef.current;
+    if (!sdk || !isMiniApp || !canAddMiniApp) return;
+    try {
+      await within(sdk.actions.addMiniApp());
+      setNotice("Warper Keeper is saved to your Farcaster apps.");
+      await pulse("success");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Warper Keeper could not be saved right now.",
+      );
+    }
+  }
+
   function trapperBundle(trapper: Trapper): TrapperBundle {
     const receipt = state.receipts.find((item) => item.trapperId === trapper.id);
     return {
@@ -1330,6 +1381,16 @@ export function WarperKeeperApp() {
              )}
            </div>
            <div className="header-actions">
+             {canAddMiniApp && (
+               <button
+                 className="icon-command"
+                 aria-label="Save Warper Keeper"
+                 title="Save to Farcaster"
+                 onClick={() => void saveMiniApp()}
+               >
+                 <BookmarkPlus size={18} />
+               </button>
+             )}
              <button
                className="icon-command"
                aria-label="Personalize Keeper"
