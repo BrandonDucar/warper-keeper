@@ -48,6 +48,10 @@ import {
   type TrapperBundle,
 } from "./keeper-types";
 import { sha256Canonical } from "./proof-envelope";
+import {
+  setWarperAnalyticsRuntime,
+  trackWarperEvent,
+} from "./product-analytics";
 
 type ViewName = "workspace" | "trappers" | "library" | "proof";
 
@@ -395,6 +399,7 @@ export function WarperKeeperApp() {
     let cancelled = false;
 
     async function initialize() {
+      trackWarperEvent("app_opened", { view: "workspace" });
       fetch("/api/gateway-health")
         .then((response) => setGatewayOnline(response.ok))
         .catch(() => setGatewayOnline(false));
@@ -441,8 +446,10 @@ export function WarperKeeperApp() {
         const insideMiniApp = await within(sdk.isInMiniApp());
         if (cancelled) return;
         setIsMiniApp(insideMiniApp);
+        setWarperAnalyticsRuntime(insideMiniApp);
 
         if (insideMiniApp) {
+          trackWarperEvent("miniapp_opened", { result: "ready" });
           const [context, capabilities] = await Promise.all([
             within(sdk.context),
             within(sdk.getCapabilities()).catch(() => []),
@@ -463,6 +470,9 @@ export function WarperKeeperApp() {
             if (response.ok) {
               setState(normalizeKeeperState(await response.json()));
               setIsDurable(true);
+              trackWarperEvent("sign_in_succeeded", {
+                auth_method: "farcaster_quickauth",
+              });
             } else {
               setNotice(
                 "Cloud save is temporarily unavailable. Your preview still works.",
@@ -494,6 +504,12 @@ export function WarperKeeperApp() {
       window.localStorage.setItem(previewStorageKey, JSON.stringify(state));
     }
   }, [isDurable, isReady, state]);
+
+  useEffect(() => {
+    if (isReady && view === "proof") {
+      trackWarperEvent("proof_viewed", { view: "proof" });
+    }
+  }, [isReady, view]);
 
   const activeTrapper = useMemo(
     () => state.trappers.find((item) => item.id === activeTrapperId) ?? null,
@@ -534,6 +550,12 @@ export function WarperKeeperApp() {
       setOnboarding(0);
       setView("workspace");
       setNotice(`${keeper.name} is ready.`);
+      trackWarperEvent("keeper_created", {
+        mode: isDurable ? "cloud" : "local",
+      });
+      trackWarperEvent("onboarding_completed", {
+        mode: isMiniApp ? "farcaster" : "web",
+      });
       await pulse("success");
     } catch {
       setNotice("Your Keeper could not be created. Please try again.");
@@ -600,6 +622,9 @@ export function WarperKeeperApp() {
       setShowNewTrapper(false);
       setActiveTrapperId(trapper.id);
       setNotice("Trapper opened with its source bundle ready.");
+      trackWarperEvent("trapper_created", {
+        mode: isDurable ? "cloud" : "local",
+      });
       await pulse("medium");
     } catch {
       setNotice("The task could not be opened. Please try again.");
@@ -703,6 +728,11 @@ export function WarperKeeperApp() {
     if (!state.keeper) return;
     setBusy(true);
     try {
+      if (input.kind === "repository") {
+        trackWarperEvent("repo_import_started", {
+          source_type: "repository",
+        });
+      }
       let source: SourceItem;
       if (isMiniApp && isDurable) {
         const response = await apiFetch("/api/miniapp/sources", {
@@ -740,6 +770,13 @@ export function WarperKeeperApp() {
         ...current,
         sources: [source, ...current.sources],
       }));
+      trackWarperEvent("source_added", { source_type: input.kind });
+      if (input.kind === "repository") {
+        trackWarperEvent("repo_import_completed", {
+          source_type: "repository",
+          result: "snapshot_created",
+        });
+      }
       setNotice(
         source.kind === "repository"
           ? "Repository snapshot cloned, pinned, and indexed."
@@ -885,6 +922,10 @@ export function WarperKeeperApp() {
         proofDrops: [proofDrop, ...current.proofDrops],
       }));
       setNotice("Proofed context pack created.");
+      trackWarperEvent("proof_viewed", {
+        result: "proof_drop_created",
+        view: "proof",
+      });
       await pulse("success");
     } finally {
       setBusy(false);
@@ -975,10 +1016,12 @@ export function WarperKeeperApp() {
 
   function downloadReceipt(receipt: Receipt) {
     downloadJson(`${receipt.id}.json`, receipt);
+    trackWarperEvent("proof_exported", { source_type: "receipt" });
   }
 
   function downloadProofDrop(proofDrop: ProofDrop) {
     downloadJson(`${proofDrop.id}.json`, proofDrop);
+    trackWarperEvent("proof_exported", { source_type: "proof_drop" });
   }
 
   async function shareKeeper() {
@@ -1006,6 +1049,7 @@ export function WarperKeeperApp() {
     try {
       await within(sdk.actions.addMiniApp());
       setNotice("Warper Keeper is saved to your Farcaster apps.");
+      trackWarperEvent("miniapp_added", { result: "succeeded" });
       await pulse("success");
     } catch (error) {
       setNotice(
@@ -1080,6 +1124,9 @@ export function WarperKeeperApp() {
         await navigator.clipboard.writeText(shareUrl);
         setNotice("Trapper link copied. Anyone with the link can inspect the bundle.");
       }
+      trackWarperEvent("trapper_shared", {
+        mode: isDurable ? "cloud_link" : "portable_bundle",
+      });
       await pulse("success");
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
