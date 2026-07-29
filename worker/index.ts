@@ -1341,11 +1341,23 @@ async function handleApi(request: Request, env: Env) {
         riskLevel: trapper.risk_level,
         status: trapper.status,
         createdAt: trapper.created_at,
-        ...(trapper.closed_at ? { closedAt: trapper.closed_at } : {}),
+        closedAt: trapper.closed_at ? String(trapper.closed_at) : null,
       },
       sources: linkedSources.results.map(sourceFromRow),
       ...(receipt ? { receipt: receiptFromRow(receipt) } : {}),
+      creator: { fid },
       exportedAt,
+      schemaVersion: 1,
+      privacyClassification: "private",
+      capabilities: [],
+      permissions: {
+        maxContextItems: 50,
+        maxSourceBytes: 1_048_576,
+        allowedDomains: [],
+        maxExecutionSeconds: 300,
+      },
+      expiry: null,
+      revocation: null,
     };
     const token = `${crypto.randomUUID().replaceAll("-", "")}${crypto
       .randomUUID()
@@ -1408,7 +1420,7 @@ async function handleApi(request: Request, env: Env) {
       result: "Task closed by owner",
     };
     const payloadJson = JSON.stringify(payload);
-    const hash = await sha256(payloadJson);
+    const hash = await sha256Value(payload);
     await env.DB.batch([
       env.DB
         .prepare(

@@ -151,6 +151,24 @@ test("ships the portable Trapper exchange schema and source-first workspace", as
   assert.match(workspace, /Build Trapper/);
 });
 
+test("emits contract-complete bundles with canonical receipt hashes", async () => {
+  const worker = await readFile(
+    new URL("../worker/index.ts", import.meta.url),
+    "utf8",
+  );
+  const app = await readFile(
+    new URL("../app/warper-keeper-app.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(worker, /const hash = await sha256Value\(payload\)/);
+  assert.match(worker, /schemaVersion: 1/);
+  assert.match(worker, /privacyClassification: "private"/);
+  assert.match(worker, /closedAt: trapper\.closed_at \? String\(trapper\.closed_at\) : null/);
+  assert.match(app, /closedAt: trapper\.closedAt \?\? null/);
+  assert.match(app, /maxSourceBytes: 1_048_576/);
+});
+
 test("ships a public Cloudflare runtime without the ChatGPT access gate", async () => {
   const config = JSON.parse(
     await readFile(

@@ -976,11 +976,22 @@ export function WarperKeeperApp() {
         riskLevel: trapper.riskLevel,
         status: trapper.status,
         createdAt: trapper.createdAt,
-        ...(trapper.closedAt ? { closedAt: trapper.closedAt } : {}),
+        closedAt: trapper.closedAt ?? null,
       },
       sources: state.sources.filter((source) => trapper.sourceIds.includes(source.id)),
       ...(receipt ? { receipt } : {}),
       exportedAt: new Date().toISOString(),
+      schemaVersion: 1,
+      privacyClassification: "private",
+      capabilities: [],
+      permissions: {
+        maxContextItems: 50,
+        maxSourceBytes: 1_048_576,
+        allowedDomains: [],
+        maxExecutionSeconds: 300,
+      },
+      expiry: null,
+      revocation: null,
     };
   }
 

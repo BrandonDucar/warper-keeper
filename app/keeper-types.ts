@@ -82,10 +82,29 @@ export type TrapperBundle = {
   trapper: Pick<
     Trapper,
     "id" | "title" | "objective" | "riskLevel" | "status" | "createdAt" | "closedAt"
-  >;
+  > & { closedAt?: string | null };
   sources: SourceItem[];
   receipt?: Receipt;
+  proofDrop?: ProofDrop;
+  creator?: {
+    fid: number;
+    username?: string | null;
+    displayName?: string | null;
+  };
   exportedAt: string;
+  schemaVersion?: 1;
+  privacyClassification?: "public" | "private" | "restricted";
+  capabilities?: Array<
+    "github:snapshot" | "web:fetch" | "data:analyze" | "proof:generate" | "context:expand"
+  >;
+  permissions?: {
+    maxContextItems: number;
+    maxSourceBytes: number;
+    allowedDomains: string[];
+    maxExecutionSeconds: number;
+  };
+  expiry?: string | null;
+  revocation?: { revokedAt: string; reason: string } | null;
 };
 
 export type KeeperPersonalization = {
