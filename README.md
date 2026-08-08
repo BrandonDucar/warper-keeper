@@ -28,6 +28,8 @@ proof so another person or agent can pick up the work without starting over.
 - Import or export a complete Keeper as portable JSON.
 - Download receipts and proofed context packs as JSON.
 - Use the same product in Farcaster or a standard browser.
+- Delegate selected Keepers to an external AI with finite permissions, expiry,
+  token rotation, revocation, idempotent writes, and receipt-backed audit.
 
 Outside Farcaster, the current preview stores your workspace on the device.
 Inside Farcaster, Quick Auth connects the workspace to a durable D1-backed
@@ -42,15 +44,20 @@ Farcaster Mini App or browser
              |
    Quick Auth + Cloudflare D1
              |
-   Private agent gateway health
+   D1 Agent Delegation ACL
              |
-   DreamNet agents and receipts
+ Direct token or Spore identity
+             |
+   bounded agent API + receipts
 ```
 
-The public app never receives a Railway operator token. Farcaster account state
-lives in Cloudflare D1, while the private Warper Keeper gateway remains the
-bounded integration surface for agent runtimes. Browser preview state stays on
-the device.
+The public app never receives an infrastructure operator token. Farcaster
+account state and agent grants live in Cloudflare D1. Direct BYO-AI tokens and
+trusted Spore assertions resolve to the same default-deny authorization model.
+Browser preview state stays on the device.
+
+See [Agent Delegation v1](docs/agent-delegation.md) for the grant schema, route
+contract, Spore assertion format, receipt boundary, and deployment gate.
 
 Public GitHub sources are inspected through GitHub's public API and recorded as
 read-only snapshots pinned to their current commit SHA. Warper Keeper does not

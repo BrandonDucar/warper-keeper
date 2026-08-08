@@ -81,7 +81,7 @@ export type TrapperBundle = {
   contractVersion: "warper-keeper-trapper/1";
   trapper: Pick<
     Trapper,
-    "id" | "title" | "objective" | "riskLevel" | "status" | "createdAt" | "closedAt"
+    "id" | "title" | "objective" | "riskLevel" | "status" | "createdAt"
   > & { closedAt?: string | null };
   sources: SourceItem[];
   receipt?: Receipt;
