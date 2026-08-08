@@ -36,6 +36,13 @@
       "when": 1785284690362,
       "tag": "0004_daffy_leper_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786218644168,
+      "tag": "0005_square_luke_cage",
+      "breakpoints": true
     }
   ]
 }

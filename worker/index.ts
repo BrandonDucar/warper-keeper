@@ -5,6 +5,7 @@ import {
   handleImageOptimization,
 } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { handleAgentApi, handleOwnerAgentGrantApi } from "./agent-api";
 
 interface Env {
   ASSETS: Fetcher;
@@ -19,6 +20,10 @@ interface Env {
       };
     };
   };
+  AGENT_GATEWAY_HEALTH_URL?: string;
+  AGENT_READ_RATE_LIMIT?: string;
+  AGENT_WRITE_RATE_LIMIT?: string;
+  SPORE_GATEWAY_HMAC_SECRET?: string;
 }
 
 interface ExecutionContext {
@@ -27,8 +32,6 @@ interface ExecutionContext {
 }
 
 const quickAuth = createClient();
-const gatewayUrl =
-  "https://warper-keeper-agent-gateway-production.up.railway.app/healthz";
 const templates = new Set(["project", "research", "content", "operations"]);
 const themes = new Set(["signal", "voltage", "archive"]);
 const risks = new Set(["low", "medium", "high"]);
@@ -565,14 +568,25 @@ async function handleApi(request: Request, env: Env) {
   const url = new URL(request.url);
 
   if (request.method === "GET" && url.pathname === "/api/gateway-health") {
+    const gatewayUrl = env.AGENT_GATEWAY_HEALTH_URL?.trim();
+    if (!gatewayUrl) {
+      return json({ ok: false, gateway: "warper-keeper", configured: false }, 503);
+    }
     try {
-      const response = await fetch(gatewayUrl, {
+      const target = new URL(gatewayUrl);
+      if (target.protocol !== "https:" || target.username || target.password) {
+        throw new Error("Gateway health URL must be public HTTPS");
+      }
+      const response = await fetch(target, {
         headers: { accept: "application/json" },
         signal: AbortSignal.timeout(4_000),
       });
-      return json({ ok: response.ok, gateway: "warper-keeper" }, response.ok ? 200 : 503);
+      return json(
+        { ok: response.ok, gateway: "warper-keeper", configured: true },
+        response.ok ? 200 : 503,
+      );
     } catch {
-      return json({ ok: false, gateway: "warper-keeper" }, 503);
+      return json({ ok: false, gateway: "warper-keeper", configured: true }, 503);
     }
   }
 
@@ -592,10 +606,16 @@ async function handleApi(request: Request, env: Env) {
     });
   }
 
+  const agentResponse = await handleAgentApi(request, env);
+  if (agentResponse) return agentResponse;
+
   if (!url.pathname.startsWith("/api/miniapp/")) return null;
   const fid = await ownerFid(request);
   if (!fid) return json({ error: "Farcaster authentication required" }, 401);
   await ensureSchema(env.DB);
+
+  const ownerAgentGrantResponse = await handleOwnerAgentGrantApi(request, env, fid);
+  if (ownerAgentGrantResponse) return ownerAgentGrantResponse;
 
   if (request.method === "GET" && url.pathname === "/api/miniapp/state") {
     return json(await stateFor(env.DB, fid));

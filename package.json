@@ -9,7 +9,9 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
+    "test:unit": "node --experimental-strip-types --test tests/agent-delegation.test.mjs tests/agent-api-contract.test.mjs",
+    "typecheck": "tsc --noEmit --pretty false",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "farcaster:preflight": "node scripts/farcaster-preflight.mjs"
@@ -25,6 +27,7 @@
     "react-dom": "19.2.6"
   },
   "overrides": {
+    "nanoid": "3.3.17",
     "postcss": "8.5.24",
     "sharp": "0.35.3",
     "ws": "8.21.1"

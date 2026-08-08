@@ -463,7 +463,9 @@ export function WarperKeeperApp() {
               `Farcaster #${context.user.fid}`,
             pfpUrl: context.user.pfpUrl,
           });
-          setCanAddMiniApp(capabilities.includes("actions.addMiniApp"));
+          setCanAddMiniApp(
+            (capabilities as readonly string[]).includes("actions.addMiniApp"),
+          );
           await within(sdk.actions.ready());
           try {
             const response = await sdk.quickAuth.fetch("/api/miniapp/state");
